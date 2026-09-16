@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ME Network Terminal</title>
-  <link rel="stylesheet" href="css/style.css?v=6" />
+  <link rel="stylesheet" href="css/style.css?v=7" />
   <link rel="icon" href="icons/appliedenergistics2_ToolWirelessTerminal.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -32,7 +32,6 @@
         <p class="login-error" id="loginError" hidden>Неверный логин или пароль</p>
       </div>
     </div>
-
     <header class="header">
       <div class="logo">
         <div class="logo-icon"><img src="icons/appliedenergistics2_ToolWirelessTerminal.png" alt="ME" /></div>
@@ -50,14 +49,12 @@
         <button class="icon-btn" id="btnLogout" title="Logout">⎋</button>
       </div>
     </header>
-
     <nav class="tabs">
       <button class="tab active" data-tab="terminal"><img class="tab-ic" src="icons/appliedenergistics2_ToolWirelessTerminal.png" alt="" />Terminal</button>
       <button class="tab" data-tab="crafting"><img class="tab-ic" src="icons/appliedenergistics2_ItemEncodedPattern.png" alt="" />Crafting</button>
       <button class="tab" data-tab="cpus">Crafting CPUs</button>
       <button class="tab" data-tab="network">Network</button>
     </nav>
-
     <div class="toolbar">
       <div class="search-wrap">
         <input type="text" id="search" placeholder="Поиск… (имя / мод / id)" autocomplete="off" />
@@ -75,7 +72,6 @@
         </select>
       </div>
     </div>
-
     <main class="main">
       <section id="tab-terminal" class="tab-panel active">
         <div class="items-grid" id="itemsGrid"></div>
@@ -91,7 +87,6 @@
         <div class="network-cards" id="networkCards"></div>
       </section>
     </main>
-
     <div class="modal-overlay" id="craftModal" hidden>
       <div class="modal">
         <div class="modal-header"><h2>Заказ крафта</h2><button class="icon-btn" id="closeModal">×</button></div>
@@ -114,7 +109,6 @@
         </div>
       </div>
     </div>
-
     <div class="modal-overlay" id="settingsModal" hidden>
       <div class="modal settings-modal">
         <div class="modal-header"><h2>Settings · Gist sync</h2><button class="icon-btn" id="closeSettings">×</button></div>
@@ -135,9 +129,8 @@
         </div>
       </div>
     </div>
-
     <div id="toast" class="toast" hidden></div>
   </div>
-  <script src="js/app.js?v=6"></script>
+  <script src="js/app.js?v=7"></script>
 </body>
 </html>
