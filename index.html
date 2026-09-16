@@ -4,15 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ME Network Terminal</title>
-  <link rel="stylesheet" href="css/style.css?v=5" />
+  <link rel="stylesheet" href="css/style.css?v=6" />
+  <link rel="icon" href="icons/appliedenergistics2_ToolWirelessTerminal.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    .logo-icon { width: 36px; height: 36px; border-radius: 10px; overflow: hidden; display: grid; place-items: center; background: linear-gradient(135deg,#0ea5e9,#06b6d4); box-shadow: 0 0 16px rgba(6,182,212,.35); }
+    .logo-icon img { width: 28px; height: 28px; image-rendering: pixelated; }
+    .login-logo { width: 52px; height: 52px; border-radius: 14px; overflow: hidden; display: grid; place-items: center; margin: 0 auto 12px; background: linear-gradient(135deg,#0ea5e9,#06b6d4); box-shadow: 0 0 24px rgba(6,182,212,.4); }
+    .login-logo img { width: 40px; height: 40px; image-rendering: pixelated; }
+    .tab img.tab-ic { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; image-rendering: pixelated; }
+  </style>
 </head>
 <body>
   <div id="app">
     <div class="login-overlay" id="loginOverlay">
       <div class="login-box">
-        <div class="login-logo">◇</div>
+        <div class="login-logo"><img src="icons/appliedenergistics2_ToolWirelessTerminal.png" alt="" /></div>
         <h1>ME Network Terminal</h1>
         <p class="login-sub">Вход только для команды</p>
         <label class="field-label">Логин (не GitHub!)</label>
@@ -27,7 +35,7 @@
 
     <header class="header">
       <div class="logo">
-        <div class="logo-icon">◇</div>
+        <div class="logo-icon"><img src="icons/appliedenergistics2_ToolWirelessTerminal.png" alt="ME" /></div>
         <div>
           <div class="logo-title">ME Network Terminal</div>
           <div class="logo-sub">Applied Energistics 2 · 1.7.10</div>
@@ -44,26 +52,26 @@
     </header>
 
     <nav class="tabs">
-      <button class="tab active" data-tab="terminal">Terminal</button>
-      <button class="tab" data-tab="crafting">Crafting</button>
+      <button class="tab active" data-tab="terminal"><img class="tab-ic" src="icons/appliedenergistics2_ToolWirelessTerminal.png" alt="" />Terminal</button>
+      <button class="tab" data-tab="crafting"><img class="tab-ic" src="icons/appliedenergistics2_ItemEncodedPattern.png" alt="" />Crafting</button>
       <button class="tab" data-tab="cpus">Crafting CPUs</button>
       <button class="tab" data-tab="network">Network</button>
     </nav>
 
     <div class="toolbar">
       <div class="search-wrap">
-        <input type="text" id="search" placeholder="Search items… (name / mod / id)" autocomplete="off" />
+        <input type="text" id="search" placeholder="Поиск… (имя / мод / id)" autocomplete="off" />
         <button id="clearSearch" class="icon-btn" title="Clear">×</button>
       </div>
       <div class="filters">
-        <label class="chk"><input type="checkbox" id="onlyCraftable" /> Only craftable</label>
-        <label class="chk"><input type="checkbox" id="onlyStock" checked /> In stock</label>
-        <select id="modFilter"><option value="">All mods</option></select>
+        <label class="chk"><input type="checkbox" id="onlyCraftable" /> Только craftable</label>
+        <label class="chk"><input type="checkbox" id="onlyStock" checked /> В наличии</label>
+        <select id="modFilter"><option value="">Все моды</option></select>
         <select id="sortBy">
-          <option value="name">Name</option>
-          <option value="qty-desc">Quantity ↓</option>
-          <option value="qty-asc">Quantity ↑</option>
-          <option value="mod">Mod</option>
+          <option value="name">Имя</option>
+          <option value="qty-desc">Кол-во ↓</option>
+          <option value="qty-asc">Кол-во ↑</option>
+          <option value="mod">Мод</option>
         </select>
       </div>
     </div>
@@ -86,10 +94,10 @@
 
     <div class="modal-overlay" id="craftModal" hidden>
       <div class="modal">
-        <div class="modal-header"><h2>Request Craft</h2><button class="icon-btn" id="closeModal">×</button></div>
+        <div class="modal-header"><h2>Заказ крафта</h2><button class="icon-btn" id="closeModal">×</button></div>
         <div class="modal-body">
           <div class="craft-item-preview" id="craftPreview"></div>
-          <label class="qty-label">Amount</label>
+          <label class="qty-label">Количество</label>
           <div class="qty-row">
             <button class="qty-btn" data-d="-1">−</button>
             <input type="number" id="craftQty" value="1" min="1" max="99999" />
@@ -101,8 +109,8 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn secondary" id="cancelCraft">Cancel</button>
-          <button class="btn primary" id="confirmCraft">Start Crafting</button>
+          <button class="btn secondary" id="cancelCraft">Отмена</button>
+          <button class="btn primary" id="confirmCraft">Крафтить</button>
         </div>
       </div>
     </div>
@@ -130,6 +138,6 @@
 
     <div id="toast" class="toast" hidden></div>
   </div>
-  <script src="js/app.js?v=5"></script>
+  <script src="js/app.js?v=6"></script>
 </body>
 </html>
