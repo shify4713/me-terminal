@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ME Network Terminal</title>
-  <link rel="stylesheet" href="css/style.css?v=2" />
+  <link rel="stylesheet" href="css/style.css?v=5" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
@@ -20,7 +20,7 @@
         <label class="field-label">Пароль</label>
         <input type="password" id="loginPass" placeholder="change_me_admin" autocomplete="current-password" />
         <button class="btn primary login-btn" id="btnLogin">Войти</button>
-        <p style="margin-top:12px;font-size:12px;color:#5c6b82;text-align:center;line-height:1.45">Логин: <b style="color:#8b9bb4">LiwMorgan</b><br>Пароль: <b style="color:#8b9bb4">change_me_admin</b><br>GitHub-ник (shify4713) сюда <b>не</b> вводить</p>
+        <p style="margin-top:12px;font-size:12px;color:#5c6b82;text-align:center;line-height:1.45">Логин: <b style="color:#8b9bb4">LiwMorgan</b><br>Пароль: <b style="color:#8b9bb4">change_me_admin</b></p>
         <p class="login-error" id="loginError" hidden>Неверный логин или пароль</p>
       </div>
     </div>
@@ -34,21 +34,10 @@
         </div>
       </div>
       <div class="header-stats" id="headerStats">
-        <div class="stat">
-          <span class="stat-label">Power</span>
-          <span class="stat-value" id="powerValue">—</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Items</span>
-          <span class="stat-value" id="itemCount">—</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">CPUs</span>
-          <span class="stat-value" id="cpuCount">—</span>
-        </div>
-        <div class="stat status" id="connStatus">
-          <span class="dot offline"></span> Offline
-        </div>
+        <div class="stat"><span class="stat-label">Power</span><span class="stat-value" id="powerValue">—</span></div>
+        <div class="stat"><span class="stat-label">Items</span><span class="stat-value" id="itemCount">—</span></div>
+        <div class="stat"><span class="stat-label">CPUs</span><span class="stat-value" id="cpuCount">—</span></div>
+        <div class="stat status" id="connStatus"><span class="dot offline"></span> Offline</div>
         <button class="icon-btn settings-btn" id="btnSettings" title="Settings">⚙</button>
         <button class="icon-btn" id="btnLogout" title="Logout">⎋</button>
       </div>
@@ -69,9 +58,7 @@
       <div class="filters">
         <label class="chk"><input type="checkbox" id="onlyCraftable" /> Only craftable</label>
         <label class="chk"><input type="checkbox" id="onlyStock" checked /> In stock</label>
-        <select id="modFilter">
-          <option value="">All mods</option>
-        </select>
+        <select id="modFilter"><option value="">All mods</option></select>
         <select id="sortBy">
           <option value="name">Name</option>
           <option value="qty-desc">Quantity ↓</option>
@@ -99,10 +86,7 @@
 
     <div class="modal-overlay" id="craftModal" hidden>
       <div class="modal">
-        <div class="modal-header">
-          <h2>Request Craft</h2>
-          <button class="icon-btn" id="closeModal">×</button>
-        </div>
+        <div class="modal-header"><h2>Request Craft</h2><button class="icon-btn" id="closeModal">×</button></div>
         <div class="modal-body">
           <div class="craft-item-preview" id="craftPreview"></div>
           <label class="qty-label">Amount</label>
@@ -112,13 +96,8 @@
             <button class="qty-btn" data-d="1">+</button>
           </div>
           <div class="qty-presets">
-            <button data-q="1">1</button>
-            <button data-q="8">8</button>
-            <button data-q="16">16</button>
-            <button data-q="32">32</button>
-            <button data-q="64">64</button>
-            <button data-q="256">256</button>
-            <button data-q="1024">1k</button>
+            <button data-q="1">1</button><button data-q="8">8</button><button data-q="16">16</button>
+            <button data-q="32">32</button><button data-q="64">64</button><button data-q="256">256</button><button data-q="1024">1k</button>
           </div>
         </div>
         <div class="modal-footer">
@@ -130,12 +109,9 @@
 
     <div class="modal-overlay" id="settingsModal" hidden>
       <div class="modal settings-modal">
-        <div class="modal-header">
-          <h2>Settings · Gist sync</h2>
-          <button class="icon-btn" id="closeSettings">×</button>
-        </div>
+        <div class="modal-header"><h2>Settings · Gist sync</h2><button class="icon-btn" id="closeSettings">×</button></div>
         <div class="modal-body">
-          <p class="hint">Данные МЭ берутся из Gist. Username = GitHub (shify4713). Token только для крафта.</p>
+          <p class="hint">Username = GitHub (shify4713). Token только для крафта.</p>
           <label class="field-label">GitHub username</label>
           <input type="text" id="cfgGistUser" placeholder="shify4713" autocomplete="off" />
           <label class="field-label">Gist ID</label>
@@ -154,6 +130,6 @@
 
     <div id="toast" class="toast" hidden></div>
   </div>
-  <script src="js/app.js?v=3"></script>
+  <script src="js/app.js?v=5"></script>
 </body>
 </html>
