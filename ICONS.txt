@@ -1,0 +1,1 @@
+Upload icons/ folder from me-terminal-release.zip to repository root for item icons.

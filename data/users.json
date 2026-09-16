@@ -1,0 +1,19 @@
+{
+  "users": [
+    {
+      "login": "LiwMorgan",
+      "password": "change_me_admin",
+      "role": "admin"
+    },
+    {
+      "login": "teammate1",
+      "password": "change_me_1",
+      "role": "user"
+    },
+    {
+      "login": "teammate2",
+      "password": "change_me_2",
+      "role": "user"
+    }
+  ]
+}
