@@ -1,5 +1,7 @@
 --[[
   ME Terminal Bridge — OC 1.7.10 / OpenOS 1.6.1 / Lua 5.2
+  getCraftables returns userdata with getItemStack() and request(amount)
+  Filter: getCraftables({name=..., damage=...})
 ]]
 
 local component = require("component")
@@ -10,8 +12,9 @@ local term = require("term")
 local CONFIG = {
   token  = "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
   gistId = "YOUR_GIST_ID_HERE",
-  updateInterval = 15,
-  maxItems = 2000,
+  updateInterval = 12,
+  maxItems = 2500,
+  maxCraftables = 800,
   localFile = "/home/me_state.json",
   debugFile = "/home/last_payload.json",
 }
@@ -22,7 +25,7 @@ local function findAE()
   for addr, t in component.list() do
     if tostring(t):find("me_") then
       local ok, proxy = pcall(component.proxy, addr)
-      if ok and proxy and type(proxy.getItemsInNetwork) == "function" then return proxy, t end
+      if ok and proxy and type(proxy.getItemsInNetwork) == "function" then return proxy, tostring(t) end
     end
   end
   return nil, "No AE2"
@@ -43,7 +46,7 @@ local function clean(s)
     elseif b == 34 then out[#out + 1] = "'" end
   end
   s = table.concat(out)
-  if #s > 48 then s = s:sub(1, 48) end
+  if #s > 56 then s = s:sub(1, 56) end
   return s
 end
 
@@ -75,13 +78,13 @@ local function jencode(val)
   end
   if t == "string" then return jstr(val) end
   if t == "table" then
-    local keys, isArr, maxn = {}, true, 0
+    local isArr, maxn, nkeys = true, 0, 0
     for k, _ in pairs(val) do
-      keys[#keys + 1] = k
+      nkeys = nkeys + 1
       if type(k) ~= "number" or k < 1 or k ~= math.floor(k) then isArr = false end
       if type(k) == "number" and k > maxn then maxn = k end
     end
-    if isArr and maxn == #keys then
+    if isArr and maxn == nkeys then
       local parts = {}
       for i = 1, maxn do parts[i] = jencode(val[i]) end
       return "[" .. table.concat(parts, ",") .. "]"
@@ -130,53 +133,86 @@ local function gistPatch(filesMap)
   data = data or ""
   if data:find("Bad credentials") then return false, "Bad credentials" end
   if data:find("Not Found") then return false, "Gist not found" end
-  if data:find("Problems parsing JSON") or data:find("Invalid request") then return false, "Bad JSON: " .. data:sub(1, 200) end
-  if data:find('"message"') and not data:find("html_url") then return false, "API: " .. data:sub(1, 200) end
+  if data:find("Problems parsing JSON") or data:find("Invalid request") then return false, "Bad JSON: " .. data:sub(1, 180) end
+  if data:find('"message"') and not data:find("html_url") then return false, "API: " .. data:sub(1, 180) end
   if err then
     if data:find("html_url") then return true, data end
-    return false, tostring(err) .. " | " .. data:sub(1, 150)
+    return false, tostring(err) .. " | " .. data:sub(1, 120)
   end
   return true, data
 end
 
-local function gistGetRaw(filename)
+local function gistGetFile(filename)
   local api = "https://api.github.com/gists/" .. CONFIG.gistId
   local headers = { ["Authorization"] = authHeader(), ["Accept"] = "application/vnd.github.v3+json", ["User-Agent"] = "OC-ME-Terminal" }
   local data, err = httpRequest("GET", api, nil, headers)
   if not data then return nil, err end
   local pos = data:find('"' .. filename .. '"', 1, true)
   if not pos then return "[]" end
-  local sub = data:sub(pos, pos + 50000)
+  local sub = data:sub(pos, pos + 80000)
   local content = sub:match('"content"%s*:%s*"(.-)"%s*[,}%\r\n]')
   if not content then return "[]" end
   content = content:gsub("\\n", "\n"):gsub('\\"', '"'):gsub("\\\\", "\\")
   return content
 end
 
+local function makeId(name, damage)
+  name = clean(name or "?")
+  damage = math.floor(tonumber(damage) or 0)
+  if damage ~= 0 then return name .. ":" .. tostring(damage) end
+  return name
+end
+
+local function labelFromId(id)
+  local raw = id:match(":(.+)$") or id
+  raw = raw:gsub("^item%.", ""):gsub("^tile%.", "")
+  raw = raw:gsub("ItemMultiMaterial%.", "Mat "):gsub("[._]", " ")
+  return clean(raw)
+end
+
+local function stackToItem(stack)
+  if type(stack) ~= "table" then return nil end
+  local name = stack.name or stack.id
+  if not name then return nil end
+  name = clean(name)
+  local damage = math.floor(tonumber(stack.damage) or 0)
+  local id = makeId(name, damage)
+  local label = clean(stack.label or stack.displayName or "")
+  if label == "" or not label:find("%a") then label = labelFromId(id) end
+  if label == "" then label = id end
+  return {
+    id = id, name = name, damage = damage, label = label,
+    size = math.floor(tonumber(stack.size or stack.qty) or 0),
+    isCraftable = not not stack.isCraftable,
+    mod = name:match("^([^:]+)") or "?"
+  }
+end
+
+local function tableLen(t)
+  if type(t) ~= "table" then return 0 end
+  if type(t.n) == "number" then return t.n end
+  local n = 0
+  for k, _ in pairs(t) do if type(k) == "number" and k > n then n = k end end
+  return n
+end
+
 local function collectItems(ae)
   local raw = safe(ae.getItemsInNetwork) or {}
   local items, n = {}, 0
-  for _, stack in pairs(raw) do
-    if n >= CONFIG.maxItems then break end
-    if type(stack) == "table" and (stack.name or stack.id) then
-      local id = clean(stack.name or stack.id)
-      local dmg = tonumber(stack.damage)
-      if dmg and dmg ~= 0 then id = id .. ":" .. tostring(math.floor(dmg)) end
-      local label = clean(stack.label or stack.displayName or "")
-      if label == "" or not label:find("%a") then
-        local rawn = id:match(":(.+)$") or id
-        rawn = rawn:gsub("^item%.", ""):gsub("^tile%.", "")
-        rawn = rawn:gsub("ItemMultiMaterial%.", "Material "):gsub("[._]", " ")
-        label = clean(rawn)
+  local len = tableLen(raw)
+  if len == 0 then
+    for _, stack in pairs(raw) do
+      if type(stack) == "table" and (stack.name or stack.id) then
+        if n >= CONFIG.maxItems then break end
+        local it = stackToItem(stack)
+        if it then items[#items + 1] = it n = n + 1 end
       end
-      if label == "" then label = id end
-      items[#items + 1] = {
-        id = id, label = label,
-        size = math.floor(tonumber(stack.size or stack.qty) or 0),
-        isCraftable = stack.isCraftable and true or false,
-        mod = id:match("^([^:]+)") or "?"
-      }
-      n = n + 1
+    end
+  else
+    for i = 1, len do
+      if n >= CONFIG.maxItems then break end
+      local it = stackToItem(raw[i])
+      if it then items[#items + 1] = it n = n + 1 end
     end
   end
   return items
@@ -184,51 +220,54 @@ end
 
 local function collectCraftables(ae)
   local list = {}
-  local raw = safe(ae.getCraftables) or {}
-  local count = 0
-  for _, c in pairs(raw) do
-    count = count + 1
-    if type(c) == "table" then
-      local stack = nil
-      if type(c.getItemStack) == "function" then stack = safe(c.getItemStack) end
-      if type(stack) ~= "table" and type(c.stack) == "table" then stack = c.stack end
-      if type(stack) == "table" then
-        local id = clean(stack.name or stack.id or "?")
-        local dmg = tonumber(stack.damage)
-        if dmg and dmg ~= 0 and not id:find(":%d+$") then
-          id = id .. ":" .. tostring(math.floor(dmg))
-        end
-        local label = clean(stack.label or stack.displayName or "")
-        if label == "" then
-          local rawn = id:match(":(.+)$") or id
-          label = clean(rawn:gsub("[._]", " "))
-        end
-        list[#list + 1] = {
-          id = id, label = label, size = 0, isCraftable = true,
-          mod = id:match("^([^:]+)") or "?"
-        }
+  local raw = safe(ae.getCraftables)
+  if type(raw) ~= "table" then
+    print(" getCraftables: " .. type(raw))
+    return list
+  end
+  local len = tableLen(raw)
+  local scanned = 0
+  local function addFrom(c)
+    if type(c) ~= "table" and type(c) ~= "userdata" then return end
+    if type(c.getItemStack) ~= "function" then return end
+    local stack = safe(c.getItemStack)
+    local it = stackToItem(stack)
+    if it then it.size = 0 it.isCraftable = true list[#list + 1] = it end
+  end
+  if len > 0 then
+    for i = 1, len do
+      if #list >= CONFIG.maxCraftables then break end
+      scanned = scanned + 1
+      addFrom(raw[i])
+    end
+  else
+    for k, c in pairs(raw) do
+      if k ~= "n" then
+        if #list >= CONFIG.maxCraftables then break end
+        scanned = scanned + 1
+        addFrom(c)
       end
     end
   end
-  if count > 0 and #list == 0 then
-    print(" warn: getCraftables=" .. count .. " parsed=0")
-  end
+  print(" craftables scanned=" .. scanned .. " ok=" .. #list)
   return list
 end
 
 local function collectCpus(ae)
   local raw = safe(ae.getCpus) or {}
   local cpus = {}
-  for i, cpu in pairs(raw) do
-    if type(cpu) == "table" then
-      cpus[#cpus + 1] = {
-        name = clean(cpu.name or ("CPU" .. tostring(i))),
-        busy = cpu.busy and true or false,
-        storage = math.floor(tonumber(cpu.storage) or 0),
-        coprocessors = math.floor(tonumber(cpu.coprocessors) or 0)
-      }
-    end
+  local len = tableLen(raw)
+  local function add(cpu, i)
+    if type(cpu) ~= "table" then return end
+    cpus[#cpus + 1] = {
+      name = clean(cpu.name or ("CPU" .. tostring(i))),
+      busy = not not cpu.busy,
+      storage = math.floor(tonumber(cpu.storage) or 0),
+      coprocessors = math.floor(tonumber(cpu.coprocessors) or 0)
+    }
   end
+  if len > 0 then for i = 1, len do add(raw[i], i) end
+  else for i, cpu in pairs(raw) do if type(i) == "number" then add(cpu, i) end end end
   return cpus
 end
 
@@ -240,51 +279,90 @@ local function collectPower(ae)
 end
 
 local function buildState(ae)
+  local items = collectItems(ae)
+  local craftables = collectCraftables(ae)
+  local craftSet = {}
+  for _, c in ipairs(craftables) do craftSet[c.id] = true end
+  for _, it in ipairs(items) do if craftSet[it.id] then it.isCraftable = true end end
   return {
-    items = collectItems(ae),
-    craftables = collectCraftables(ae),
-    cpus = collectCpus(ae),
-    power = collectPower(ae),
+    items = items, craftables = craftables,
+    cpus = collectCpus(ae), power = collectPower(ae),
     updated = tostring(os.time())
   }
 end
 
-local function requestCraft(ae, itemId, amount)
-  amount = tonumber(amount) or 1
-  local crafts = safe(ae.getCraftables) or {}
-  for _, c in pairs(crafts) do
-    if type(c) == "table" and type(c.getItemStack) == "function" and type(c.request) == "function" then
-      local stack = safe(c.getItemStack)
-      if type(stack) == "table" then
-        local id = clean(stack.name or stack.id or "")
-        local dmg = tonumber(stack.damage)
-        if dmg and dmg ~= 0 and not id:find(":%d+$") then id = id .. ":" .. tostring(math.floor(dmg)) end
-        if id == itemId then
-          local ok, st = pcall(function() return c.request(amount) end)
-          if ok then return true end
-          return false, tostring(st)
-        end
+local function requestCraft(ae, name, damage, amount)
+  name = clean(name or "")
+  damage = math.floor(tonumber(damage) or 0)
+  amount = math.floor(tonumber(amount) or 1)
+  if name == "" or amount < 1 then return false, "bad args" end
+
+  local filtered = safe(function() return ae.getCraftables({ name = name, damage = damage }) end)
+  if type(filtered) == "table" then
+    local len = tableLen(filtered)
+    if len >= 1 and filtered[1] and type(filtered[1].request) == "function" then
+      local ok, st = pcall(function() return filtered[1].request(amount) end)
+      if ok then return true, "ok" end
+      return false, tostring(st)
+    end
+  end
+
+  local all = safe(ae.getCraftables) or {}
+  local len = tableLen(all)
+  local function tryOne(c)
+    if type(c) ~= "table" and type(c) ~= "userdata" then return false end
+    if type(c.getItemStack) ~= "function" or type(c.request) ~= "function" then return false end
+    local stack = safe(c.getItemStack)
+    if type(stack) ~= "table" then return false end
+    local sn = clean(stack.name or stack.id or "")
+    local sd = math.floor(tonumber(stack.damage) or 0)
+    if sn == name and sd == damage then
+      local ok, st = pcall(function() return c.request(amount) end)
+      if ok then return true end
+      return false, tostring(st)
+    end
+    return false
+  end
+  if len > 0 then
+    for i = 1, len do
+      local ok, msg = tryOne(all[i])
+      if ok then return true, "ok" end
+      if msg then return false, msg end
+    end
+  else
+    for k, c in pairs(all) do
+      if k ~= "n" then
+        local ok, msg = tryOne(c)
+        if ok then return true, "ok" end
+        if msg then return false, msg end
       end
     end
   end
-  return false, "not found"
+  return false, "not found: " .. name .. " dmg=" .. tostring(damage)
 end
 
 local function processQueue(ae)
-  local raw, err = gistGetRaw("craft_queue.json")
-  if not raw then print("queue err: " .. tostring(err)) return end
+  local raw, err = gistGetFile("craft_queue.json")
+  if not raw then print(" queue err: " .. tostring(err)) return end
   if raw == "[]" or raw == "" then return end
   local queue = {}
   for obj in raw:gmatch("{.-}") do
+    local name = obj:match('"name"%s*:%s*"([^"]*)"')
     local id = obj:match('"id"%s*:%s*"([^"]*)"')
-    local amount = obj:match('"amount"%s*:%s*(%d+)')
-    if id then queue[#queue + 1] = { id = id, amount = tonumber(amount) or 1 } end
+    local damage = tonumber(obj:match('"damage"%s*:%s*(%d+)'))
+    local amount = tonumber(obj:match('"amount"%s*:%s*(%d+)')) or 1
+    if not name and id then
+      local a, b, c = id:match("^([^:]+):([^:]+):(%d+)$")
+      if a and b and c then name = a .. ":" .. b damage = tonumber(c)
+      else name = id damage = 0 end
+    end
+    if name then queue[#queue + 1] = { name = name, damage = damage or 0, amount = amount } end
   end
   if #queue == 0 then return end
-  print("queue " .. #queue)
+  print(" queue: " .. #queue)
   for _, req in ipairs(queue) do
-    local ok, msg = requestCraft(ae, req.id, req.amount)
-    print(" " .. req.amount .. "x " .. req.id .. " " .. (ok and "OK" or tostring(msg)))
+    local ok, msg = requestCraft(ae, req.name, req.damage, req.amount)
+    print("  " .. req.amount .. "x " .. req.name .. ":" .. req.damage .. " -> " .. (ok and "OK" or tostring(msg)))
   end
   gistPatch({ ["craft_queue.json"] = "[]" })
 end
@@ -293,16 +371,20 @@ local function main()
   term.clear()
   print("=== ME Terminal Bridge ===")
   local ae, kind = findAE()
-  if not ae then print("ERROR " .. tostring(kind)) return end
+  if not ae then print("ERROR: " .. tostring(kind)) return end
   print("AE2: " .. tostring(kind))
+  print("api: items=" .. tostring(type(ae.getItemsInNetwork)=="function") .. " craft=" .. tostring(type(ae.getCraftables)=="function"))
+
   if CONFIG.token:find("XXX") or CONFIG.gistId:find("YOUR_") then
     print("Set CONFIG.token and CONFIG.gistId")
     return
   end
-  print("Test...")
+
+  print("Test PATCH...")
   local okT, errT = gistPatch({ ["me_state.json"] = '{"items":[],"craftables":[],"cpus":[],"power":{},"ping":1}' })
   if not okT then print("TEST FAIL: " .. tostring(errT)) return end
   print("Test OK")
+
   while true do
     local t0 = computer.uptime()
     print("")
@@ -313,22 +395,28 @@ local function main()
       local s = {}
       for i = 1, math.min(3, #state.craftables) do s[i] = state.craftables[i].id end
       print(" craft: " .. table.concat(s, ", "))
-    else
-      print(" tip: put encoded patterns into ME Interface pattern slots")
     end
+
     local stateJson = jencode(state)
     local f = io.open(CONFIG.localFile, "w")
     if f then f:write(stateJson) f:close() end
+
     local okP, errP = gistPatch({ ["me_state.json"] = stateJson })
     if okP then print("push OK")
     else
       print("full FAIL: " .. tostring(errP))
-      local miniItems = {}
-      for i, it in ipairs(state.items) do miniItems[i] = { id = it.id, size = it.size } end
-      local mini = jencode({ items = miniItems, craftables = state.craftables, cpus = state.cpus, power = state.power, updated = state.updated })
+      local miniItems, miniCraft = {}, {}
+      for i, it in ipairs(state.items) do
+        miniItems[i] = { id = it.id, name = it.name, damage = it.damage, size = it.size, isCraftable = it.isCraftable, mod = it.mod }
+      end
+      for i, it in ipairs(state.craftables) do
+        miniCraft[i] = { id = it.id, name = it.name, damage = it.damage, size = 0, isCraftable = true, mod = it.mod }
+      end
+      local mini = jencode({ items = miniItems, craftables = miniCraft, cpus = state.cpus, power = state.power, updated = state.updated })
       local ok2, err2 = gistPatch({ ["me_state.json"] = mini })
       print("mini: " .. (ok2 and "OK" or tostring(err2)))
     end
+
     processQueue(ae)
     local wait = math.max(1, CONFIG.updateInterval - (computer.uptime() - t0))
     print("sleep " .. string.format("%.0f", wait))
@@ -339,10 +427,18 @@ end
 local args = { ... }
 if args[1] == "craft" and args[2] then
   local ae = findAE()
-  if ae then
-    local ok, msg = requestCraft(ae, args[2], args[3] or 1)
-    print(ok and "OK" or msg)
-  end
+  if not ae then print("no AE") return end
+  local name, damage, amount = args[2], tonumber(args[3]) or 0, tonumber(args[4]) or 1
+  local a, b = name:match("^(.+):(%d+)$")
+  if a and b then name = a damage = tonumber(b) amount = tonumber(args[3]) or 1 end
+  local ok, msg = requestCraft(ae, name, damage, amount)
+  print(ok and "OK" or msg)
+elseif args[1] == "listcraft" then
+  local ae = findAE()
+  if not ae then print("no AE") return end
+  local c = collectCraftables(ae)
+  print("craftables: " .. #c)
+  for i = 1, math.min(30, #c) do print(" " .. c[i].id .. " | " .. c[i].label) end
 else
   main()
 end
