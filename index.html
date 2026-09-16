@@ -10,22 +10,21 @@
 </head>
 <body>
   <div id="app">
-    <!-- Login -->
     <div class="login-overlay" id="loginOverlay">
       <div class="login-box">
         <div class="login-logo">◇</div>
         <h1>ME Network Terminal</h1>
         <p class="login-sub">Вход только для команды</p>
-        <label class="field-label">Логин</label>
+        <label class="field-label">Логин (не GitHub!)</label>
         <input type="text" id="loginUser" placeholder="LiwMorgan" autocomplete="username" />
         <label class="field-label">Пароль</label>
-        <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password" />
+        <input type="password" id="loginPass" placeholder="change_me_admin" autocomplete="current-password" />
         <button class="btn primary login-btn" id="btnLogin">Войти</button>
+        <p style="margin-top:12px;font-size:12px;color:#5c6b82;text-align:center;line-height:1.45">Логин: <b style="color:#8b9bb4">LiwMorgan</b><br>Пароль: <b style="color:#8b9bb4">change_me_admin</b><br>GitHub-ник (shify4713) сюда <b>не</b> вводить</p>
         <p class="login-error" id="loginError" hidden>Неверный логин или пароль</p>
       </div>
     </div>
 
-    <!-- Header -->
     <header class="header">
       <div class="logo">
         <div class="logo-icon">◇</div>
@@ -55,7 +54,6 @@
       </div>
     </header>
 
-    <!-- Tabs -->
     <nav class="tabs">
       <button class="tab active" data-tab="terminal">Terminal</button>
       <button class="tab" data-tab="crafting">Crafting</button>
@@ -63,7 +61,6 @@
       <button class="tab" data-tab="network">Network</button>
     </nav>
 
-    <!-- Toolbar -->
     <div class="toolbar">
       <div class="search-wrap">
         <input type="text" id="search" placeholder="Search items… (name / mod / id)" autocomplete="off" />
@@ -84,31 +81,22 @@
       </div>
     </div>
 
-    <!-- Main content -->
     <main class="main">
-      <!-- Terminal tab -->
       <section id="tab-terminal" class="tab-panel active">
         <div class="items-grid" id="itemsGrid"></div>
         <div class="empty" id="emptyState" hidden>Nothing found</div>
       </section>
-
-      <!-- Crafting tab -->
       <section id="tab-crafting" class="tab-panel">
         <div class="items-grid" id="craftGrid"></div>
       </section>
-
-      <!-- CPUs tab -->
       <section id="tab-cpus" class="tab-panel">
         <div class="cpus-list" id="cpusList"></div>
       </section>
-
-      <!-- Network tab -->
       <section id="tab-network" class="tab-panel">
         <div class="network-cards" id="networkCards"></div>
       </section>
     </main>
 
-    <!-- Craft Modal -->
     <div class="modal-overlay" id="craftModal" hidden>
       <div class="modal">
         <div class="modal-header">
@@ -140,7 +128,6 @@
       </div>
     </div>
 
-    <!-- Settings Modal -->
     <div class="modal-overlay" id="settingsModal" hidden>
       <div class="modal settings-modal">
         <div class="modal-header">
@@ -148,12 +135,12 @@
           <button class="icon-btn" id="closeSettings">×</button>
         </div>
         <div class="modal-body">
-          <p class="hint">Данные МЭ-сети берутся из Gist. Токен нужен только для заказа крафтов (хранится только в браузере).</p>
+          <p class="hint">Данные МЭ берутся из Gist. Username = GitHub (shify4713). Token только для крафта.</p>
           <label class="field-label">GitHub username</label>
-          <input type="text" id="cfgGistUser" placeholder="your-username" autocomplete="off" />
+          <input type="text" id="cfgGistUser" placeholder="shify4713" autocomplete="off" />
           <label class="field-label">Gist ID</label>
           <input type="text" id="cfgGistId" placeholder="a1b2c3d4e5f6..." autocomplete="off" />
-          <label class="field-label">Token (gist scope) — только для крафта</label>
+          <label class="field-label">Token (gist scope)</label>
           <input type="password" id="cfgToken" placeholder="ghp_..." autocomplete="off" />
           <label class="field-label">Poll interval (sec)</label>
           <input type="number" id="cfgPoll" value="12" min="8" max="120" />
@@ -165,10 +152,8 @@
       </div>
     </div>
 
-    <!-- Toast -->
     <div id="toast" class="toast" hidden></div>
   </div>
-
   <script src="js/app.js"></script>
 </body>
 </html>
