@@ -1,6 +1,5 @@
 --[[
   ME Terminal Bridge — OC 1.7.10 / OpenOS 1.6.1 / Lua 5.2
-  Gist: me_state.json (OC writes) + craft_queue.json (site writes)
 ]]
 
 local component = require("component")
@@ -12,7 +11,7 @@ local CONFIG = {
   token  = "ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
   gistId = "YOUR_GIST_ID_HERE",
   updateInterval = 15,
-  maxItems = 800,
+  maxItems = 500,
   localFile = "/home/me_state.json",
   debugFile = "/home/last_payload.json",
 }
@@ -32,7 +31,7 @@ local function findAE()
       end
     end
   end
-  return nil, "No AE2 (Adapter next to Controller/Interface)"
+  return nil, "No AE2"
 end
 
 local function safe(fn, ...)
@@ -43,63 +42,71 @@ end
 
 local function clean(s)
   s = tostring(s or "")
-  s = s:gsub("[%z\1-\31]", "")
-  s = s:gsub('"', "'")
-  s = s:gsub("\\", "/")
-  if #s > 64 then s = s:sub(1, 64) end
+  local out = {}
+  for i = 1, #s do
+    local b = s:byte(i)
+    if b >= 32 and b < 127 and b ~= 34 and b ~= 92 then
+      out[#out + 1] = string.char(b)
+    elseif b == 34 then
+      out[#out + 1] = "'"
+    end
+  end
+  s = table.concat(out)
+  if #s > 48 then s = s:sub(1, 48) end
   return s
 end
 
 local function jstr(s)
   s = tostring(s or "")
-  s = s:gsub("\\", "\\\\")
-  s = s:gsub('"', '\\"')
-  s = s:gsub("\n", "\\n")
-  s = s:gsub("\r", "\\r")
-  s = s:gsub("\t", "\\t")
-  s = s:gsub("[%z\1-\31]", "")
-  return '"' .. s .. '"'
+  local out = {'"'}
+  for i = 1, #s do
+    local b = s:byte(i)
+    if b == 34 then out[#out + 1] = '\\"'
+    elseif b == 92 then out[#out + 1] = '\\\\'
+    elseif b == 10 then out[#out + 1] = '\\n'
+    elseif b == 13 then out[#out + 1] = '\\r'
+    elseif b == 9 then out[#out + 1] = '\\t'
+    elseif b >= 32 and b < 127 then out[#out + 1] = string.char(b)
+    end
+  end
+  out[#out + 1] = '"'
+  return table.concat(out)
 end
 
 local function jencode(val)
   local t = type(val)
-  if val == nil then return "null"
-  elseif t == "boolean" then return val and "true" or "false"
-  elseif t == "number" then
-    if val ~= val or val == math.huge or val == -math.huge then return "0" end
-    return string.format("%.10g", val)
-  elseif t == "string" then return jstr(val)
-  elseif t == "table" then
-    local isArr, maxn = true, 0
+  if val == nil then return "null" end
+  if t == "boolean" then return val and "true" or "false" end
+  if t == "number" then
+    if val ~= val or val >= math.huge or val <= -math.huge then return "0" end
+    local n = math.floor(val)
+    if n == val then return tostring(n) end
+    return string.format("%.6g", val)
+  end
+  if t == "string" then return jstr(val) end
+  if t == "table" then
+    local keys = {}
+    local isArr = true
+    local maxn = 0
     for k, _ in pairs(val) do
-      if type(k) ~= "number" then isArr = false break end
-      if k > maxn then maxn = k end
+      keys[#keys + 1] = k
+      if type(k) ~= "number" or k < 1 or k ~= math.floor(k) then isArr = false end
+      if type(k) == "number" and k > maxn then maxn = k end
     end
-    if isArr then
+    if isArr and maxn == #keys then
       local parts = {}
       for i = 1, maxn do parts[i] = jencode(val[i]) end
       return "[" .. table.concat(parts, ",") .. "]"
     end
     local parts = {}
     for k, v in pairs(val) do
-      if type(k) == "string" and k:sub(1, 1) ~= "_" then
+      if type(k) == "string" then
         parts[#parts + 1] = jstr(k) .. ":" .. jencode(v)
       end
     end
     return "{" .. table.concat(parts, ",") .. "}"
   end
   return "null"
-end
-
-local function decodeQueue(str)
-  if not str or str == "" or str == "[]" then return {} end
-  local arr = {}
-  for obj in str:gmatch("{.-}") do
-    local id = obj:match('"id"%s*:%s*"([^"]*)"')
-    local amount = obj:match('"amount"%s*:%s*(%d+)')
-    if id then arr[#arr + 1] = { id = id, amount = tonumber(amount) or 1 } end
-  end
-  return arr
 end
 
 local function authHeader()
@@ -121,48 +128,51 @@ local function httpRequest(method, url, body, headers)
   return data, nil
 end
 
-local function gistPatch(filename, contentStr)
-  local payload = '{"files":{' .. jstr(filename) .. ':{"content":' .. jstr(contentStr) .. "}}"
+local function gistPatch(filesMap)
+  local filesObj = {}
+  for name, content in pairs(filesMap) do
+    filesObj[name] = { content = content }
+  end
+  local payload = jencode({ files = filesObj })
   local url = "https://api.github.com/gists/" .. CONFIG.gistId
   local headers = {
     ["Authorization"] = authHeader(),
     ["Accept"] = "application/vnd.github.v3+json",
     ["Content-Type"] = "application/json",
-    ["User-Agent"] = "OpenComputers-ME-Terminal"
+    ["User-Agent"] = "OC-ME-Terminal"
   }
   local f = io.open(CONFIG.debugFile, "w")
   if f then f:write(payload) f:close() end
-  print(" PATCH " .. filename .. " (" .. #payload .. "b)")
+  print(" PATCH (" .. #payload .. "b)")
   local data, err = httpRequest("PATCH", url, payload, headers)
   data = data or ""
   if data:find("Bad credentials") then return false, "Bad credentials" end
   if data:find("Not Found") then return false, "Gist not found" end
   if data:find("Problems parsing JSON") or data:find("Invalid request") then
-    return false, "Invalid JSON: " .. data:sub(1, 180)
+    return false, "Bad JSON: " .. data:sub(1, 200)
   end
-  if data:find('"message"') and not data:find("html_url") and not data:find('"files"') then
-    return false, "GitHub: " .. data:sub(1, 180)
+  if data:find('"message"') and not data:find("html_url") then
+    return false, "API: " .. data:sub(1, 200)
   end
   if err then
-    if data:find("html_url") or data:find('"id"') then return true, data end
-    return false, tostring(err) .. " | " .. data:sub(1, 120)
+    if data:find("html_url") then return true, data end
+    return false, tostring(err) .. " | " .. data:sub(1, 150)
   end
   return true, data
 end
 
-local function gistGetFile(filename)
-  local url = "https://api.github.com/gists/" .. CONFIG.gistId
+local function gistGetRaw(filename)
+  local api = "https://api.github.com/gists/" .. CONFIG.gistId
   local headers = {
     ["Authorization"] = authHeader(),
     ["Accept"] = "application/vnd.github.v3+json",
-    ["User-Agent"] = "OpenComputers-ME-Terminal"
+    ["User-Agent"] = "OC-ME-Terminal"
   }
-  local data, err = httpRequest("GET", url, nil, headers)
+  local data, err = httpRequest("GET", api, nil, headers)
   if not data then return nil, err end
-  if data:find("Bad credentials") then return nil, "Bad credentials" end
   local pos = data:find('"' .. filename .. '"', 1, true)
   if not pos then return "[]" end
-  local sub = data:sub(pos, pos + 20000)
+  local sub = data:sub(pos, pos + 50000)
   local content = sub:match('"content"%s*:%s*"(.-)"%s*[,}%\r\n]')
   if not content then return "[]" end
   content = content:gsub("\\n", "\n"):gsub('\\"', '"'):gsub("\\\\", "\\")
@@ -182,8 +192,8 @@ local function collectItems(ae)
         id = id,
         label = clean(stack.label or stack.displayName or id),
         size = math.floor(tonumber(stack.size or stack.qty) or 0),
-        isCraftable = not not stack.isCraftable,
-        mod = id:match("^([^:]+)") or "unknown"
+        isCraftable = stack.isCraftable and true or false,
+        mod = id:match("^([^:]+)") or "?"
       }
       n = n + 1
     end
@@ -198,10 +208,10 @@ local function collectCraftables(ae)
     if type(c) == "table" and type(c.getItemStack) == "function" then
       local stack = safe(c.getItemStack)
       if type(stack) == "table" then
-        local id = clean(stack.name or stack.id or "unknown")
+        local id = clean(stack.name or stack.id or "?")
         list[#list + 1] = {
           id = id, label = clean(stack.label or id), size = 0,
-          isCraftable = true, mod = id:match("^([^:]+)") or "unknown"
+          isCraftable = true, mod = id:match("^([^:]+)") or "?"
         }
       end
     end
@@ -214,20 +224,11 @@ local function collectCpus(ae)
   local cpus = {}
   for i, cpu in pairs(raw) do
     if type(cpu) == "table" then
-      local out = nil
-      if cpu.busy and type(cpu.output) == "table" then
-        out = {
-          id = clean(cpu.output.name or cpu.output.id or "?"),
-          label = clean(cpu.output.label or "?"),
-          progress = tonumber(cpu.progress) or tonumber(cpu.output.progress) or 0
-        }
-      end
       cpus[#cpus + 1] = {
-        name = clean(cpu.name or ("CPU-" .. tostring(i))),
-        busy = not not cpu.busy,
+        name = clean(cpu.name or ("CPU" .. tostring(i))),
+        busy = cpu.busy and true or false,
         storage = math.floor(tonumber(cpu.storage) or 0),
-        coprocessors = math.floor(tonumber(cpu.coprocessors) or 0),
-        output = out
+        coprocessors = math.floor(tonumber(cpu.coprocessors) or 0)
       }
     end
   end
@@ -236,11 +237,8 @@ end
 
 local function collectPower(ae)
   return {
-    stored = tonumber(safe(ae.getStoredPower)) or 0,
-    max = tonumber(safe(ae.getMaxStoredPower)) or 0,
-    avgInjection = tonumber(safe(ae.getAvgPowerInjection)) or 0,
-    avgUsage = tonumber(safe(ae.getAvgPowerUsage)) or 0,
-    idle = tonumber(safe(ae.getIdlePowerUsage)) or 0
+    stored = math.floor(tonumber(safe(ae.getStoredPower)) or 0),
+    max = math.floor(tonumber(safe(ae.getMaxStoredPower)) or 0)
   }
 end
 
@@ -260,13 +258,10 @@ local function requestCraft(ae, itemId, amount)
   for _, c in pairs(crafts) do
     if type(c) == "table" and type(c.getItemStack) == "function" and type(c.request) == "function" then
       local stack = safe(c.getItemStack)
-      if type(stack) == "table" then
-        local id = clean(stack.name or stack.id or "")
-        if id == itemId then
-          local ok, st = pcall(function() return c.request(amount) end)
-          if ok then return true, "ok" end
-          return false, tostring(st)
-        end
+      if type(stack) == "table" and clean(stack.name or stack.id or "") == itemId then
+        local ok, st = pcall(function() return c.request(amount) end)
+        if ok then return true end
+        return false, tostring(st)
       end
     end
   end
@@ -274,37 +269,42 @@ local function requestCraft(ae, itemId, amount)
 end
 
 local function processQueue(ae)
-  local raw, err = gistGetFile("craft_queue.json")
-  if not raw then print(" queue: " .. tostring(err)) return end
-  local queue = decodeQueue(raw)
+  local raw, err = gistGetRaw("craft_queue.json")
+  if not raw then print("queue err: " .. tostring(err)) return end
+  if raw == "[]" or raw == "" then return end
+  local queue = {}
+  for obj in raw:gmatch("{.-}") do
+    local id = obj:match('"id"%s*:%s*"([^"]*)"')
+    local amount = obj:match('"amount"%s*:%s*(%d+)')
+    if id then queue[#queue + 1] = { id = id, amount = tonumber(amount) or 1 } end
+  end
   if #queue == 0 then return end
-  print(" queue: " .. #queue)
+  print("queue " .. #queue)
   for _, req in ipairs(queue) do
     local ok, msg = requestCraft(ae, req.id, req.amount)
-    print("  " .. tostring(req.amount) .. "x " .. tostring(req.id) .. " -> " .. (ok and "OK" or tostring(msg)))
+    print(" " .. req.amount .. "x " .. req.id .. " " .. (ok and "OK" or tostring(msg)))
   end
-  local okc, errc = gistPatch("craft_queue.json", "[]")
-  if not okc then print(" clear: " .. tostring(errc)) end
+  gistPatch({ ["craft_queue.json"] = "[]" })
 end
 
 local function main()
   term.clear()
   print("=== ME Terminal Bridge ===")
   local ae, kind = findAE()
-  if not ae then print("ERROR: " .. tostring(kind)) return end
+  if not ae then print("ERROR " .. tostring(kind)) return end
   print("AE2: " .. tostring(kind))
-  print("Gist: " .. tostring(CONFIG.gistId):sub(1, 20))
 
   if CONFIG.token:find("XXX") or CONFIG.gistId:find("YOUR_") then
-    print("ERROR: set token + gistId in CONFIG")
+    print("Set CONFIG.token and CONFIG.gistId")
     return
   end
 
-  print("Test PATCH...")
-  local okT, errT = gistPatch("me_state.json", '{"items":[],"craftables":[],"cpus":[],"power":{},"ping":true}')
+  print("Test...")
+  local okT, errT = gistPatch({
+    ["me_state.json"] = '{"items":[],"craftables":[],"cpus":[],"power":{},"ping":1}'
+  })
   if not okT then
     print("TEST FAIL: " .. tostring(errT))
-    print("Need classic PAT with gist scope + valid gistId")
     return
   end
   print("Test OK")
@@ -312,25 +312,49 @@ local function main()
   while true do
     local t0 = computer.uptime()
     print("")
-    print("--- update ---")
+    print("---")
     local state = buildState(ae)
-    print("items=" .. #state.items .. " craft=" .. #state.craftables .. " cpus=" .. #state.cpus)
+    print("i=" .. #state.items .. " c=" .. #state.craftables .. " cpu=" .. #state.cpus)
 
     local stateJson = jencode(state)
     local f = io.open(CONFIG.localFile, "w")
     if f then f:write(stateJson) f:close() end
 
-    local okP, errP = gistPatch("me_state.json", stateJson)
-    if okP then print("pushed OK")
+    local okP, errP = gistPatch({ ["me_state.json"] = stateJson })
+    if okP then
+      print("push OK")
     else
-      print("push FAIL: " .. tostring(errP))
-      print("see " .. CONFIG.debugFile)
+      print("full FAIL: " .. tostring(errP))
+      local miniItems = {}
+      for i, it in ipairs(state.items) do
+        miniItems[i] = { id = it.id, size = it.size }
+      end
+      local mini = jencode({
+        items = miniItems,
+        craftables = {},
+        cpus = state.cpus,
+        power = state.power,
+        updated = state.updated
+      })
+      print("try mini (" .. #mini .. "b)")
+      local ok2, err2 = gistPatch({ ["me_state.json"] = mini })
+      if ok2 then print("mini OK")
+      else
+        print("mini FAIL: " .. tostring(err2))
+        local tiny = jencode({
+          items = {}, craftables = {}, cpus = {},
+          power = state.power, updated = state.updated,
+          itemCount = #state.items
+        })
+        local ok3, err3 = gistPatch({ ["me_state.json"] = tiny })
+        print("tiny: " .. (ok3 and "OK" or tostring(err3)))
+      end
     end
 
     processQueue(ae)
 
     local wait = math.max(1, CONFIG.updateInterval - (computer.uptime() - t0))
-    print("sleep " .. string.format("%.0f", wait) .. "s")
+    print("sleep " .. string.format("%.0f", wait))
     os.sleep(wait)
   end
 end
@@ -338,9 +362,10 @@ end
 local args = { ... }
 if args[1] == "craft" and args[2] then
   local ae = findAE()
-  if not ae then print("no AE") return end
-  local ok, msg = requestCraft(ae, args[2], args[3] or 1)
-  print(ok and "OK" or msg)
+  if ae then
+    local ok, msg = requestCraft(ae, args[2], args[3] or 1)
+    print(ok and "OK" or msg)
+  end
 else
   main()
 end
