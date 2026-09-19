@@ -69,6 +69,7 @@ local TOTAL_PAGES    = math.max(1, math.ceil(#items / ITEMS_PER_PAGE))
 local BTN_REFRESH_X1, BTN_REFRESH_X2 = 100, 115
 local BTN_PAGE_X1, BTN_PAGE_X2       = 117, 136
 local BTN_CANCEL_X1, BTN_CANCEL_X2   = 138, 157
+local BTN_RECRAFT_X1, BTN_RECRAFT_X2 = 40, 63   -- видна только во время крафта
 
 local COUNT_VAL   = {1, 3, 5, 10, 20, 50}
 local COUNT_COLOR = {0x26A69A, 0x29B6F6, 0x66BB6A, 0xFFA726, 0xAB47BC, 0xEC407A}
@@ -332,6 +333,20 @@ local function drawHeader()
     gpu.set(BTN_CANCEL_X1 + 3, HEADER_Y, " ОТМЕНА ")
 end
 
+-- Кнопка ручного повторного заказа крафта — видна только пока идёт крафт
+local function drawRecraftButton(active)
+    local width = BTN_RECRAFT_X2 - BTN_RECRAFT_X1
+    if active then
+        gpu.setBackground(0x1565C0)
+        gpu.fill(BTN_RECRAFT_X1, HEADER_Y, width, 1, " ")
+        gpu.setForeground(0xFFFFFF)
+        gpu.set(BTN_RECRAFT_X1 + 1, HEADER_Y, "🔄 ЗАПРОС КРАФТА")
+    else
+        gpu.setBackground(0x1F1F2E)
+        gpu.fill(BTN_RECRAFT_X1, HEADER_Y, width, 1, " ")
+    end
+end
+
 local function draw()
     gpu.setBackground(0x101014)
     gpu.fill(1, 1, w, h, " ")
@@ -419,38 +434,30 @@ local function doCraft(index, count)
 
     if have < needed and item.ruda == 0 then
         local missing = needed - have
-        local started = false
-
-        while not started and not cancel do
-            setStatus(string.format("⏳ Запрашиваю крафт: %s (не хватает %d)...", item.name, missing), 0xFFE082)
-            started = tryRequestCrafting(item, missing)
-
-            if started then
-                setStatus("▶ Крафт запущен: " .. item.name .. " — жду блоки...", 0x69F0AE)
-                computer.beep(700, 0.03)
-            else
-                setStatus(string.format("⚠ Нет шаблона: «%s»! Повтор через 5с...", item.name), 0xFF8A65)
-                local waited = 0
-                while waited < 5 and not cancel do
-                    local e, _, x, y = event.pull(0.2, "touch")
-                    if e == "touch" and x >= BTN_CANCEL_X1 and x <= BTN_CANCEL_X2 and y == HEADER_Y then
-                        cancel = true
-                        computer.beep(200, 0.05)
-                        break
-                    end
-                    waited = waited + 0.2
-                end
-            end
-        end
+        setStatus(string.format("⏳ Заказываю крафт: %s ×%d...", item.name, missing), 0xFFE082)
+        tryRequestCrafting(item, missing)
+        computer.beep(700, 0.03)
+        os.sleep(0.3)
+        setStatus("▶ Крафт заказан: " .. item.name .. " — жду поступления...", 0x69F0AE)
+        drawRecraftButton(true)
     end
 
     local dropped = 0
     while dropped < needed and not cancel do
         local e, _, x, y = event.pull(0, "touch")
-        if e == "touch" and x >= BTN_CANCEL_X1 and y == HEADER_Y then
+        if e == "touch" and x >= BTN_CANCEL_X1 and x <= BTN_CANCEL_X2 and y == HEADER_Y then
             cancel = true
             computer.beep(200, 0.05)
             break
+        elseif e == "touch" and x >= BTN_RECRAFT_X1 and x <= BTN_RECRAFT_X2 and y == HEADER_Y then
+            if item.ruda == 0 then
+                computer.beep(900, 0.03)
+                tryRequestCrafting(item, needed - dropped)
+                setStatus("🔄 Повторный запрос отправлен: " .. item.name, 0xFFE082)
+                os.sleep(0.3)
+            else
+                computer.beep(150, 0.05)
+            end
         end
 
         local toTake = math.min(needed - dropped, 64)
@@ -465,9 +472,11 @@ local function doCraft(index, count)
         setStatus(string.format("%s  %d/%d (%d%%) %s", item.name, dropped, needed, percent, bar), 0x69F0AE)
 
         if got == 0 then
-            os.sleep(0.03)
+            os.sleep(0.15)
         end
     end
+
+    drawRecraftButton(false)
 
     currentCraft = 0
     drawCardFull(index, false)   -- также обновляет числа именно этой карточки
