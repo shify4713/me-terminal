@@ -1,0 +1,359 @@
+local component = require("component")
+local event = require("event")
+local computer = require("computer")
+local term = require("term")
+local gpu = component.gpu
+local ae = component.me_interface
+
+local w, h = 160, 50
+gpu.setResolution(w, h)
+
+local EXPORT_SIDE = "DOWN"
+
+local items = {
+    {name = "Железная",       ruda = 1, block = "minecraft:iron_ore",          dmg = 0, need = 4500, singu = "Avaritia:Singularity", sDmg = 0},
+    {name = "Золотая",        ruda = 1, block = "minecraft:gold_ore",          dmg = 0, need = 2700, singu = "Avaritia:Singularity", sDmg = 1},
+    {name = "Лазуритовая",    ruda = 1, block = "minecraft:lapis_ore",         dmg = 0, need = 600,  singu = "Avaritia:Singularity", sDmg = 2},
+    {name = "Редстоун",       ruda = 1, block = "minecraft:redstone_ore",      dmg = 0, need = 720,  singu = "Avaritia:Singularity", sDmg = 3},
+    {name = "Кварцевая",      ruda = 1, block = "minecraft:quartz_ore",        dmg = 0, need = 2200, singu = "Avaritia:Singularity", sDmg = 4},
+    {name = "Медная",         ruda = 1, block = "IC2:copperOre",               dmg = 0, need = 4500, singu = "Avaritia:Singularity", sDmg = 5},
+    {name = "Оловянная",      ruda = 1, block = "IC2:tinOre",                  dmg = 0, need = 10000,singu = "Avaritia:Singularity", sDmg = 6},
+    {name = "Бронзовая",      ruda = 0, block = "IC2:blockMetal",              dmg = 2, need = 600,  singu = "universalsingularities:universal.general.singularity", sDmg = 2},
+    {name = "Свинцовая",      ruda = 1, block = "ThermalFoundation:Ore",       dmg = 3, need = 9000, singu = "Avaritia:Singularity", sDmg = 7},
+    {name = "Серебряная",     ruda = 1, block = "ThermalFoundation:Ore",       dmg = 2, need = 2700, singu = "Avaritia:Singularity", sDmg = 8},
+    {name = "Глиняная",       ruda = 0, block = "minecraft:clay",              dmg = 0, need = 666,  singu = "Avaritia:Singularity", sDmg = 10},
+    {name = "Угольная",       ruda = 0, block = "minecraft:coal_block",        dmg = 0, need = 600,  singu = "universalsingularities:universal.vanilla.singularity", sDmg = 0},
+    {name = "Алмазная",       ruda = 0, block = "minecraft:diamond_block",     dmg = 0, need = 600,  singu = "universalsingularities:universal.vanilla.singularity", sDmg = 2},
+    {name = "Эндериумовая",   ruda = 0, block = "ThermalFoundation:Storage",   dmg = 12,need = 111,  singu = "thermsingul:Thermal Singularity", sDmg = 4},
+    {name = "Инвариумовая",   ruda = 0, block = "ThermalFoundation:Storage",   dmg = 8, need = 111,  singu = "universalsingularities:universal.general.singularity", sDmg = 5},
+    {name = "Наэлектросталь", ruda = 0, block = "EnderIO:blockIngotStorage",   dmg = 0, need = 111,  singu = "universalsingularities:universal.enderIO.singularity", sDmg = 1},
+    {name = "Энергосплав",    ruda = 0, block = "EnderIO:blockIngotStorage",   dmg = 1, need = 111,  singu = "universalsingularities:universal.enderIO.singularity", sDmg = 2},
+    {name = "Тёмная сталь",   ruda = 0, block = "EnderIO:blockIngotStorage",   dmg = 6, need = 111,  singu = "universalsingularities:universal.enderIO.singularity", sDmg = 3},
+    {name = "Пульсирующее",   ruda = 0, block = "EnderIO:blockIngotStorage",   dmg = 5, need = 111,  singu = "universalsingularities:universal.enderIO.singularity", sDmg = 4},
+    {name = "Соулариевая",    ruda = 0, block = "EnderIO:blockIngotStorage",   dmg = 7, need = 111,  singu = "universalsingularities:universal.enderIO.singularity", sDmg = 6},
+    {name = "Вибрирующий",    ruda = 0, block = "EnderIO:blockIngotStorage",   dmg = 2, need = 111,  singu = "universalsingularities:universal.enderIO.singularity", sDmg = 7},
+    {name = "Дракониевая",    ruda = 0, block = "DraconicEvolution:draconium", dmg = 0, need = 600,  singu = "universalsingularities:universal.draconicEvolution.singularity", sDmg = 0},
+    {name = "Ториевая",       ruda = 0, block = "mcs_addons:tile.thorium_block", dmg = 0, need = 111, singu = "thermsingul:Thermal Singularity", sDmg = 0},
+    {name = "Обедн. торий",   ruda = 0, block = "mcs_addons:tile.thorium_imp_block", dmg = 0, need = 55, singu = "universalsingularities:universal.bigReactors.singularity", sDmg = 1},
+    {name = "Обогащ. торий",  ruda = 0, block = "mcs_addons:tile.thorium_reb_block", dmg = 0, need = 33, singu = "universalsingularities:universal.bigReactors.singularity", sDmg = 0},
+}
+
+local crafting = false
+local cancel = false
+local currentCraft = 0
+
+local function getQty(id, dmg)
+    local ok, data = pcall(function()
+        return ae.getItemDetail({id = id, dmg = dmg})
+    end)
+    if ok and data then
+        return data.all().qty or 0
+    end
+    return 0
+end
+
+local function shortNum(n)
+    if n >= 1000000 then
+        return string.format("%.1fM", n / 1000000)
+    elseif n >= 1000 then
+        return string.format("%.1fk", n / 1000)
+    else
+        return tostring(n)
+    end
+end
+
+local function exportItems(id, dmg, amount)
+    local exported = 0
+    local remaining = amount
+    while remaining > 0 and not cancel do
+        local ok, detail = pcall(function()
+            return ae.getItemDetail({id = id, dmg = dmg})
+        end)
+        if not ok or not detail then break end
+        local stack = detail.all()
+        if not stack or not stack.qty or stack.qty <= 0 then break end
+
+        local toExport = math.min(remaining, 64)
+        local success, result = pcall(function()
+            return ae.exportItem({id = id, dmg = dmg}, EXPORT_SIDE, toExport)
+        end)
+
+        if success and result and result.size and result.size > 0 then
+            exported = exported + result.size
+            remaining = remaining - result.size
+        else
+            success, result = pcall(function()
+                return ae.exportItem(stack, EXPORT_SIDE, toExport)
+            end)
+            if success and result and result.size and result.size > 0 then
+                exported = exported + result.size
+                remaining = remaining - result.size
+            else
+                break
+            end
+        end
+
+        local e, _, x, y = event.pull(0)
+        if e == "touch" and x >= 138 and y == 1 then
+            cancel = true
+            computer.beep(200, 0.05)
+            break
+        end
+    end
+    return exported
+end
+
+local function setStatus(text, color)
+    gpu.setBackground(0x1C1C28)
+    gpu.setForeground(color or 0xDDDDDD)
+    gpu.fill(1, h - 1, w, 2, " ")
+    gpu.set(2, h - 1, text)
+end
+
+-- Только цифры
+local function updateNumbers()
+    for i, item in ipairs(items) do
+        local y = 3 + (i * 2) - 1   -- учитываем отступ
+        local have = getQty(item.block, item.dmg)
+        local sings = getQty(item.singu, item.sDmg)
+        local can = math.floor(have / item.need)
+
+        if i == currentCraft then
+            gpu.setBackground(0x1B5E20)
+        elseif i % 2 == 0 then
+            gpu.setBackground(0x1C1C2A)
+        else
+            gpu.setBackground(0x161622)
+        end
+
+        gpu.fill(28, y, 9, 1, " ")
+        gpu.fill(38, y, 7, 1, " ")
+        gpu.fill(47, y, 6, 1, " ")
+        gpu.fill(94, y, 8, 1, " ")
+
+        gpu.setForeground(0xEEEEEE)
+        gpu.set(28, y, tostring(have))
+
+        gpu.setForeground(can > 0 and 0x69F0AE or 0xFF5252)
+        gpu.set(38, y, "+" .. can)
+
+        gpu.setForeground(0xFFE082)
+        gpu.set(47, y, tostring(sings))
+
+        gpu.setForeground(0x80CBC4)
+        gpu.set(94, y, shortNum(have))
+    end
+    setStatus("Цифры обновлены", 0x80CBC4)
+end
+
+local function drawRow(i, highlight)
+    local item = items[i]
+    local y = 3 + (i * 2) - 1          -- основная строка
+    local lineY = y + 1                -- линия-разделитель под ней
+
+    -- Фон основной строки
+    if highlight then
+        gpu.setBackground(0x1B5E20)
+    elseif i % 2 == 0 then
+        gpu.setBackground(0x1C1C2A)
+    else
+        gpu.setBackground(0x161622)
+    end
+    gpu.fill(1, y, w, 1, " ")
+
+    -- Левый маркер
+    gpu.setForeground(0x4A4A60)
+    gpu.set(1, y, "▌")
+
+    -- Название
+    gpu.setForeground(0xFF8A80)
+    gpu.set(3, y, item.name)
+
+    -- Нужно
+    gpu.setForeground(0xB0BEC5)
+    gpu.set(20, y, tostring(item.need))
+
+    -- Есть
+    local have = getQty(item.block, item.dmg)
+    gpu.setForeground(0xEEEEEE)
+    gpu.set(28, y, tostring(have))
+
+    -- Можно
+    local can = math.floor(have / item.need)
+    gpu.setForeground(can > 0 and 0x69F0AE or 0xFF5252)
+    gpu.set(38, y, "+" .. can)
+
+    -- Синг
+    local sings = getQty(item.singu, item.sDmg)
+    gpu.setForeground(0xFFE082)
+    gpu.set(47, y, tostring(sings))
+
+    -- Кнопки + с разделителями
+    local positions = {56, 62, 68, 74, 80, 86}
+    local colors = {0x26A69A, 0x29B6F6, 0x66BB6A, 0xFFA726, 0xAB47BC, 0xEC407A}
+
+    for b = 1, 6 do
+        gpu.setForeground(0x2A2A3C)
+        gpu.set(positions[b] - 1, y, "│")
+        gpu.setForeground(colors[b])
+        gpu.set(positions[b], y, " + ")
+    end
+
+    -- В МЭ
+    gpu.setForeground(0x80CBC4)
+    gpu.set(94, y, shortNum(have))
+
+    -- ===== СПЛОШНАЯ ЛИНИЯ ПОД СТРОКОЙ =====
+    gpu.setBackground(0x14141C)
+    gpu.fill(1, lineY, w, 1, " ")
+    gpu.setForeground(0x2F2F42)
+    gpu.set(1, lineY, string.rep("─", w))
+end
+
+local function draw()
+    gpu.setBackground(0x14141C)
+    gpu.fill(1, 1, w, h, " ")
+
+    -- Шапка
+    gpu.setBackground(0x1F1F2E)
+    gpu.setForeground(0xFFFFFF)
+    gpu.fill(1, 1, w, 1, " ")
+    gpu.set(2, 1, "Singularity Creator")
+
+    gpu.setBackground(0x2E7D32)
+    gpu.fill(120, 1, 16, 1, " ")
+    gpu.set(122, 1, "ОБНОВИТЬ")
+
+    gpu.setBackground(0xC62828)
+    gpu.fill(138, 1, 20, 1, " ")
+    gpu.set(141, 1, " ОТМЕНА ")
+
+    gpu.setBackground(0x2A2A3C)
+    gpu.fill(1, 2, w, 1, " ")
+
+    -- Заголовки колонок
+    gpu.setBackground(0x1A1A28)
+    gpu.setForeground(0x90A4AE)
+    gpu.fill(1, 3, w, 1, " ")
+    gpu.set(3,  3, "Название")
+    gpu.set(20, 3, "Нужно")
+    gpu.set(28, 3, "Есть")
+    gpu.set(38, 3, "Можно")
+    gpu.set(47, 3, "Синг")
+    gpu.set(56, 3, "1")
+    gpu.set(62, 3, "3")
+    gpu.set(68, 3, "5")
+    gpu.set(74, 3, "10")
+    gpu.set(80, 3, "20")
+    gpu.set(86, 3, "50")
+    gpu.set(94, 3, "В МЭ")
+
+    -- Рисуем все строки с линиями
+    for i = 1, #items do
+        drawRow(i, i == currentCraft)
+    end
+
+    setStatus("Готов к работе", 0x78909C)
+end
+
+local function doCraft(index, count)
+    local item = items[index]
+    if not item then return end
+
+    crafting = true
+    cancel = false
+    currentCraft = index
+    drawRow(index, true)
+
+    local needed = item.need * count
+    local have = getQty(item.block, item.dmg)
+
+    if have < needed and item.ruda == 0 then
+        local missing = needed - have
+        setStatus("Заказываю в МЭ: " .. missing .. " × " .. item.name, 0xFFE082)
+        pcall(function()
+            ae.requestCrafting({id = item.block, dmg = item.dmg}, missing)
+        end)
+        os.sleep(0.1)
+    end
+
+    local dropped = 0
+    while dropped < needed and not cancel do
+        local e, _, x, y = event.pull(0)
+        if e == "touch" and x >= 138 and y == 1 then
+            cancel = true
+            computer.beep(200, 0.05)
+            break
+        end
+
+        local toTake = math.min(needed - dropped, 64)
+        local got = exportItems(item.block, item.dmg, toTake)
+        dropped = dropped + got
+
+        local percent = math.floor(dropped / needed * 100)
+        local barLen = 28
+        local filled = math.floor(barLen * percent / 100)
+        local bar = string.rep("█", filled) .. string.rep("░", barLen - filled)
+
+        setStatus(string.format("%s  %d/%d (%d%%) %s", item.name, dropped, needed, percent, bar), 0x69F0AE)
+
+        if got == 0 then
+            os.sleep(0.03)
+        end
+    end
+
+    currentCraft = 0
+    drawRow(index, false)
+
+    if cancel then
+        setStatus("✖ ОТМЕНЕНО  |  " .. dropped .. " / " .. needed, 0xFF5252)
+        computer.beep(180, 0.1)
+    else
+        setStatus("✔ ГОТОВО: " .. item.name .. " ×" .. count, 0x69F0AE)
+        computer.beep(1000, 0.04)
+        computer.beep(1400, 0.05)
+    end
+
+    crafting = false
+    cancel = false
+    os.sleep(0.7)
+end
+
+term.clear()
+draw()
+
+while true do
+    local e, _, x, y = event.pull(0.2, "touch")
+
+    if e == "touch" then
+        if crafting then
+            if x >= 138 and x <= 158 and y == 1 then
+                cancel = true
+                computer.beep(200, 0.05)
+            end
+        else
+            if x >= 120 and x <= 135 and y == 1 then
+                computer.beep(800, 0.02)
+                updateNumbers()
+            elseif y >= 4 then
+                -- Пересчитываем индекс с учётом отступов (каждая строка занимает 2 позиции)
+                local idx = math.floor((y - 3) / 2)
+                if idx >= 1 and idx <= #items then
+                    local map = {
+                        [56] = 1, [57] = 1, [58] = 1,
+                        [62] = 3, [63] = 3, [64] = 3,
+                        [68] = 5, [69] = 5, [70] = 5,
+                        [74] = 10,[75] = 10,[76] = 10,
+                        [80] = 20,[81] = 20,[82] = 20,
+                        [86] = 50,[87] = 50,[88] = 50
+                    }
+                    local cnt = map[x]
+                    if cnt then
+                        computer.beep(1000, 0.03)
+                        doCraft(idx, cnt)
+                    end
+                end
+            end
+        end
+    end
+end
