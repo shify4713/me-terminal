@@ -5,7 +5,11 @@ local term = require("term")
 local gpu = component.gpu
 local ae = component.me_interface
 
-local w, h = 160, 50
+-- ============================================================
+--  Адаптивное разрешение (не падает на GPU/экранах ниже 3 тира)
+-- ============================================================
+local maxW, maxH = gpu.maxResolution()
+local w, h = math.min(160, maxW), math.min(50, maxH)
 gpu.setResolution(w, h)
 
 local EXPORT_SIDE = "DOWN"
@@ -38,10 +42,52 @@ local items = {
     {name = "Обогащ. торий",  ruda = 0, block = "mcs_addons:tile.thorium_reb_block", dmg = 0, need = 33, singu = "universalsingularities:universal.bigReactors.singularity", sDmg = 0},
 }
 
+-- ============================================================
+--  Раскладка экрана
+-- ============================================================
+local HEADER_Y      = 1
+local SEP_Y         = 2
+local COLHEAD_Y      = 3
+local CONTENT_TOP    = 4
+local CONTENT_BOTTOM = h - 2          -- последние 2 строки — под статус-бар
+local VISIBLE_ROWS   = CONTENT_BOTTOM - CONTENT_TOP + 1
+
+local BTN_REFRESH_X1, BTN_REFRESH_X2 = 108, 123
+local BTN_UP_X, BTN_DOWN_X           = 125, 128
+local BTN_CANCEL_X1, BTN_CANCEL_X2   = 138, 157
+
+local COUNT_POS = {56, 62, 68, 74, 80, 86}
+local COUNT_VAL = {1, 3, 5, 10, 20, 50}
+local COUNT_COLOR = {0x26A69A, 0x29B6F6, 0x66BB6A, 0xFFA726, 0xAB47BC, 0xEC407A}
+
 local crafting = false
 local cancel = false
 local currentCraft = 0
+local scrollOffset = 0   -- индекс (0-based) первого показанного предмета
 
+local maxScroll = math.max(0, #items - VISIBLE_ROWS)
+
+local function clampScroll()
+    if scrollOffset < 0 then scrollOffset = 0 end
+    if scrollOffset > maxScroll then scrollOffset = maxScroll end
+end
+
+-- Строка экрана для индекса предмета i (может быть вне видимой области)
+local function rowY(i)
+    return CONTENT_TOP + (i - 1 - scrollOffset)
+end
+
+-- Индекс предмета по клику на строку экрана y (или nil, если мимо списка)
+local function indexAtY(y)
+    if y < CONTENT_TOP or y > CONTENT_BOTTOM then return nil end
+    local idx = scrollOffset + (y - CONTENT_TOP) + 1
+    if idx >= 1 and idx <= #items then return idx end
+    return nil
+end
+
+-- ============================================================
+--  Работа с ME
+-- ============================================================
 local function getQty(id, dmg)
     local ok, data = pcall(function()
         return ae.getItemDetail({id = id, dmg = dmg})
@@ -93,8 +139,8 @@ local function exportItems(id, dmg, amount)
             end
         end
 
-        local e, _, x, y = event.pull(0)
-        if e == "touch" and x >= 138 and y == 1 then
+        local e, _, x, y = event.pull(0, "touch")
+        if e == "touch" and x >= BTN_CANCEL_X1 and y == HEADER_Y then
             cancel = true
             computer.beep(200, 0.05)
             break
@@ -110,48 +156,16 @@ local function setStatus(text, color)
     gpu.set(2, h - 1, text)
 end
 
--- Только цифры
-local function updateNumbers()
-    for i, item in ipairs(items) do
-        local y = 3 + (i * 2) - 1   -- учитываем отступ
-        local have = getQty(item.block, item.dmg)
-        local sings = getQty(item.singu, item.sDmg)
-        local can = math.floor(have / item.need)
+-- ============================================================
+--  Отрисовка
+-- ============================================================
 
-        if i == currentCraft then
-            gpu.setBackground(0x1B5E20)
-        elseif i % 2 == 0 then
-            gpu.setBackground(0x1C1C2A)
-        else
-            gpu.setBackground(0x161622)
-        end
-
-        gpu.fill(28, y, 9, 1, " ")
-        gpu.fill(38, y, 7, 1, " ")
-        gpu.fill(47, y, 6, 1, " ")
-        gpu.fill(94, y, 8, 1, " ")
-
-        gpu.setForeground(0xEEEEEE)
-        gpu.set(28, y, tostring(have))
-
-        gpu.setForeground(can > 0 and 0x69F0AE or 0xFF5252)
-        gpu.set(38, y, "+" .. can)
-
-        gpu.setForeground(0xFFE082)
-        gpu.set(47, y, tostring(sings))
-
-        gpu.setForeground(0x80CBC4)
-        gpu.set(94, y, shortNum(have))
-    end
-    setStatus("Цифры обновлены", 0x80CBC4)
-end
-
+-- Рисует одну строку предмета i, если она попадает в видимую область
 local function drawRow(i, highlight)
     local item = items[i]
-    local y = 3 + (i * 2) - 1          -- основная строка
-    local lineY = y + 1                -- линия-разделитель под ней
+    local y = rowY(i)
+    if y < CONTENT_TOP or y > CONTENT_BOTTOM then return end
 
-    -- Фон основной строки
     if highlight then
         gpu.setBackground(0x1B5E20)
     elseif i % 2 == 0 then
@@ -161,53 +175,53 @@ local function drawRow(i, highlight)
     end
     gpu.fill(1, y, w, 1, " ")
 
-    -- Левый маркер
     gpu.setForeground(0x4A4A60)
     gpu.set(1, y, "▌")
 
-    -- Название
     gpu.setForeground(0xFF8A80)
     gpu.set(3, y, item.name)
 
-    -- Нужно
     gpu.setForeground(0xB0BEC5)
     gpu.set(20, y, tostring(item.need))
 
-    -- Есть
     local have = getQty(item.block, item.dmg)
     gpu.setForeground(0xEEEEEE)
     gpu.set(28, y, tostring(have))
 
-    -- Можно
     local can = math.floor(have / item.need)
     gpu.setForeground(can > 0 and 0x69F0AE or 0xFF5252)
     gpu.set(38, y, "+" .. can)
 
-    -- Синг
     local sings = getQty(item.singu, item.sDmg)
     gpu.setForeground(0xFFE082)
     gpu.set(47, y, tostring(sings))
 
-    -- Кнопки + с разделителями
-    local positions = {56, 62, 68, 74, 80, 86}
-    local colors = {0x26A69A, 0x29B6F6, 0x66BB6A, 0xFFA726, 0xAB47BC, 0xEC407A}
-
     for b = 1, 6 do
         gpu.setForeground(0x2A2A3C)
-        gpu.set(positions[b] - 1, y, "│")
-        gpu.setForeground(colors[b])
-        gpu.set(positions[b], y, " + ")
+        gpu.set(COUNT_POS[b] - 1, y, "│")
+        gpu.setForeground(COUNT_COLOR[b])
+        gpu.set(COUNT_POS[b], y, " + ")
     end
 
-    -- В МЭ
     gpu.setForeground(0x80CBC4)
     gpu.set(94, y, shortNum(have))
+end
 
-    -- ===== СПЛОШНАЯ ЛИНИЯ ПОД СТРОКОЙ =====
-    gpu.setBackground(0x14141C)
-    gpu.fill(1, lineY, w, 1, " ")
-    gpu.setForeground(0x2F2F42)
-    gpu.set(1, lineY, string.rep("─", w))
+-- Обновляет только цифры видимых строк (без полной перерисовки)
+local function updateNumbers()
+    for i = scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items) do
+        drawRow(i, i == currentCraft)
+    end
+    setStatus("Цифры обновлены", 0x80CBC4)
+end
+
+local function drawScrollIndicator()
+    gpu.setBackground(0x1F1F2E)
+    gpu.fill(BTN_UP_X - 1, HEADER_Y, 5, 1, " ")
+    gpu.setForeground(scrollOffset > 0 and 0x64B5F6 or 0x3A3A4A)
+    gpu.set(BTN_UP_X, HEADER_Y, "▲")
+    gpu.setForeground(scrollOffset < maxScroll and 0x64B5F6 or 0x3A3A4A)
+    gpu.set(BTN_DOWN_X, HEADER_Y, "▼")
 end
 
 local function draw()
@@ -217,45 +231,61 @@ local function draw()
     -- Шапка
     gpu.setBackground(0x1F1F2E)
     gpu.setForeground(0xFFFFFF)
-    gpu.fill(1, 1, w, 1, " ")
-    gpu.set(2, 1, "Singularity Creator")
+    gpu.fill(1, HEADER_Y, w, 1, " ")
+    gpu.set(2, HEADER_Y, "Singularity Creator")
 
     gpu.setBackground(0x2E7D32)
-    gpu.fill(120, 1, 16, 1, " ")
-    gpu.set(122, 1, "ОБНОВИТЬ")
+    gpu.fill(BTN_REFRESH_X1, HEADER_Y, BTN_REFRESH_X2 - BTN_REFRESH_X1, 1, " ")
+    gpu.setForeground(0xFFFFFF)
+    gpu.set(BTN_REFRESH_X1 + 2, HEADER_Y, "ОБНОВИТЬ")
+
+    drawScrollIndicator()
 
     gpu.setBackground(0xC62828)
-    gpu.fill(138, 1, 20, 1, " ")
-    gpu.set(141, 1, " ОТМЕНА ")
+    gpu.fill(BTN_CANCEL_X1, HEADER_Y, BTN_CANCEL_X2 - BTN_CANCEL_X1, 1, " ")
+    gpu.setForeground(0xFFFFFF)
+    gpu.set(BTN_CANCEL_X1 + 3, HEADER_Y, " ОТМЕНА ")
 
     gpu.setBackground(0x2A2A3C)
-    gpu.fill(1, 2, w, 1, " ")
+    gpu.fill(1, SEP_Y, w, 1, " ")
 
     -- Заголовки колонок
     gpu.setBackground(0x1A1A28)
     gpu.setForeground(0x90A4AE)
-    gpu.fill(1, 3, w, 1, " ")
-    gpu.set(3,  3, "Название")
-    gpu.set(20, 3, "Нужно")
-    gpu.set(28, 3, "Есть")
-    gpu.set(38, 3, "Можно")
-    gpu.set(47, 3, "Синг")
-    gpu.set(56, 3, "1")
-    gpu.set(62, 3, "3")
-    gpu.set(68, 3, "5")
-    gpu.set(74, 3, "10")
-    gpu.set(80, 3, "20")
-    gpu.set(86, 3, "50")
-    gpu.set(94, 3, "В МЭ")
+    gpu.fill(1, COLHEAD_Y, w, 1, " ")
+    gpu.set(3,  COLHEAD_Y, "Название")
+    gpu.set(20, COLHEAD_Y, "Нужно")
+    gpu.set(28, COLHEAD_Y, "Есть")
+    gpu.set(38, COLHEAD_Y, "Можно")
+    gpu.set(47, COLHEAD_Y, "Синг")
+    for b = 1, 6 do
+        gpu.set(COUNT_POS[b], COLHEAD_Y, tostring(COUNT_VAL[b]))
+    end
+    gpu.set(94, COLHEAD_Y, "В МЭ")
 
-    -- Рисуем все строки с линиями
-    for i = 1, #items do
+    -- Видимые строки
+    for i = scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items) do
         drawRow(i, i == currentCraft)
     end
 
-    setStatus("Готов к работе", 0x78909C)
+    if #items > VISIBLE_ROWS then
+        setStatus(string.format("Готов к работе  |  показано %d-%d из %d",
+            scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items), #items), 0x78909C)
+    else
+        setStatus("Готов к работе", 0x78909C)
+    end
 end
 
+local function scroll(delta)
+    if #items <= VISIBLE_ROWS then return end
+    scrollOffset = scrollOffset + delta
+    clampScroll()
+    draw()
+end
+
+-- ============================================================
+--  Крафт
+-- ============================================================
 local function doCraft(index, count)
     local item = items[index]
     if not item then return end
@@ -279,8 +309,8 @@ local function doCraft(index, count)
 
     local dropped = 0
     while dropped < needed and not cancel do
-        local e, _, x, y = event.pull(0)
-        if e == "touch" and x >= 138 and y == 1 then
+        local e, _, x, y = event.pull(0, "touch")
+        if e == "touch" and x >= BTN_CANCEL_X1 and y == HEADER_Y then
             cancel = true
             computer.beep(200, 0.05)
             break
@@ -319,41 +349,50 @@ local function doCraft(index, count)
     os.sleep(0.7)
 end
 
+-- ============================================================
+--  Главный цикл
+-- ============================================================
 term.clear()
 draw()
 
 while true do
-    local e, _, x, y = event.pull(0.2, "touch")
+    local e, _, x, y, direction = event.pull(0.2, "touch")
+    if not e then
+        e = select(1, event.pull(0, "scroll"))
+    end
 
     if e == "touch" then
         if crafting then
-            if x >= 138 and x <= 158 and y == 1 then
+            if x >= BTN_CANCEL_X1 and x <= BTN_CANCEL_X2 and y == HEADER_Y then
                 cancel = true
                 computer.beep(200, 0.05)
             end
         else
-            if x >= 120 and x <= 135 and y == 1 then
+            if x >= BTN_REFRESH_X1 and x <= BTN_REFRESH_X2 and y == HEADER_Y then
                 computer.beep(800, 0.02)
                 updateNumbers()
-            elseif y >= 4 then
-                -- Пересчитываем индекс с учётом отступов (каждая строка занимает 2 позиции)
-                local idx = math.floor((y - 3) / 2)
-                if idx >= 1 and idx <= #items then
-                    local map = {
-                        [56] = 1, [57] = 1, [58] = 1,
-                        [62] = 3, [63] = 3, [64] = 3,
-                        [68] = 5, [69] = 5, [70] = 5,
-                        [74] = 10,[75] = 10,[76] = 10,
-                        [80] = 20,[81] = 20,[82] = 20,
-                        [86] = 50,[87] = 50,[88] = 50
-                    }
-                    local cnt = map[x]
-                    if cnt then
-                        computer.beep(1000, 0.03)
-                        doCraft(idx, cnt)
+            elseif x == BTN_UP_X and y == HEADER_Y then
+                computer.beep(600, 0.02)
+                scroll(-1)
+            elseif x == BTN_DOWN_X and y == HEADER_Y then
+                computer.beep(600, 0.02)
+                scroll(1)
+            else
+                local idx = indexAtY(y)
+                if idx then
+                    -- Кнопка " + " занимает 3 символа: pos, pos+1, pos+2
+                    for b = 1, 6 do
+                        local px = COUNT_POS[b]
+                        if x >= px and x <= px + 2 then
+                            computer.beep(1000, 0.03)
+                            doCraft(idx, COUNT_VAL[b])
+                            break
+                        end
                     end
                 end
             end
         end
+    elseif e == "scroll" and not crafting then
+        scroll(direction and -direction or 0)
     end
 end
