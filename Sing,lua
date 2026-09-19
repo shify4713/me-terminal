@@ -6,9 +6,7 @@ local gpu = component.gpu
 local ae = component.me_interface
 
 -- ============================================================
---  Адаптивное разрешение (не падает на GPU/экранах ниже 3 тира)
---  Берём РЕАЛЬНОЕ разрешение после установки — оно может
---  отличаться от запрошенного (клампится драйвером/экраном).
+--  Адаптивное разрешение — берём РЕАЛЬНОЕ после установки
 -- ============================================================
 local maxW, maxH = gpu.maxResolution()
 gpu.setResolution(math.min(160, maxW), math.min(50, maxH))
@@ -45,47 +43,46 @@ local items = {
 }
 
 -- ============================================================
---  Раскладка экрана
+--  Раскладка: карточная сетка (3 колонки)
 -- ============================================================
-local HEADER_Y       = 1              -- заголовок + кнопки
-local COLHEAD_Y      = 2              -- заголовки колонок (сразу под шапкой)
-local CONTENT_TOP    = 3
-local STATUS_Y       = h              -- статус — ОДНА строка внизу
+local HEADER_Y       = 1
+local CONTENT_TOP    = 2
+local STATUS_Y       = h
 local CONTENT_BOTTOM = h - 1
-local VISIBLE_ROWS   = CONTENT_BOTTOM - CONTENT_TOP + 1
+
+local COLUMNS  = 3
+local MARGIN   = 1
+local GAP_X    = 2
+local GAP_Y    = 1
+local CARD_H   = 5   -- ╭border, name, stats, buttons, ╰border
+local CARD_W   = math.floor((w - 2 * MARGIN - (COLUMNS - 1) * GAP_X) / COLUMNS)
+local INNER_W  = CARD_W - 2   -- ширина текста внутри рамки │...│
+
+local ROWS_AVAILABLE = math.max(1, math.floor((CONTENT_BOTTOM - CONTENT_TOP + 1) / (CARD_H + GAP_Y)))
+local ITEMS_PER_PAGE = ROWS_AVAILABLE * COLUMNS
+local TOTAL_PAGES    = math.max(1, math.ceil(#items / ITEMS_PER_PAGE))
 
 local BTN_REFRESH_X1, BTN_REFRESH_X2 = 100, 115
-local BTN_SCROLL_X1, BTN_SCROLL_X2   = 117, 136   -- пилюля "▲ 1-23 из 25 ▼"
+local BTN_PAGE_X1, BTN_PAGE_X2       = 117, 136
 local BTN_CANCEL_X1, BTN_CANCEL_X2   = 138, 157
 
-local COUNT_POS = {56, 62, 68, 74, 80, 86}
-local COUNT_VAL = {1, 3, 5, 10, 20, 50}
+local COUNT_VAL   = {1, 3, 5, 10, 20, 50}
 local COUNT_COLOR = {0x26A69A, 0x29B6F6, 0x66BB6A, 0xFFA726, 0xAB47BC, 0xEC407A}
+local BTN_SLOT_W  = math.max(4, math.floor(INNER_W / #COUNT_VAL))
 
 local crafting = false
 local cancel = false
 local currentCraft = 0
-local scrollOffset = 0   -- индекс (0-based) первого показанного предмета
+local page = 0   -- текущая страница, 0-индекс
 
-local maxScroll = math.max(0, #items - VISIBLE_ROWS)
-
-local function clampScroll()
-    if scrollOffset < 0 then scrollOffset = 0 end
-    if scrollOffset > maxScroll then scrollOffset = maxScroll end
+local function clampPage()
+    if page < 0 then page = 0 end
+    if page > TOTAL_PAGES - 1 then page = TOTAL_PAGES - 1 end
 end
 
--- Строка экрана для индекса предмета i (может быть вне видимой области)
-local function rowY(i)
-    return CONTENT_TOP + (i - 1 - scrollOffset)
-end
-
--- Индекс предмета по клику на строку экрана y (или nil, если мимо списка)
-local function indexAtY(y)
-    if y < CONTENT_TOP or y > CONTENT_BOTTOM then return nil end
-    local idx = scrollOffset + (y - CONTENT_TOP) + 1
-    if idx >= 1 and idx <= #items then return idx end
-    return nil
-end
+-- Позиция карточки на экране по (col, row) — 0-индексы в пределах страницы
+local function cardX(col) return MARGIN + col * (CARD_W + GAP_X) + 1 end
+local function cardY(row) return CONTENT_TOP + row * (CARD_H + GAP_Y) end
 
 -- ============================================================
 --  Работа с ME
@@ -108,6 +105,12 @@ local function shortNum(n)
     else
         return tostring(n)
     end
+end
+
+local function padRight(s, len)
+    s = tostring(s)
+    if #s >= len then return s:sub(1, len) end
+    return s .. string.rep(" ", len - #s)
 end
 
 local function exportItems(id, dmg, amount)
@@ -159,140 +162,168 @@ local function setStatus(text, color)
 end
 
 -- ============================================================
---  Отрисовка
+--  Отрисовка карточки
 -- ============================================================
-
--- Рисует одну строку предмета i, если она попадает в видимую область
-local function drawRow(i, highlight)
-    local item = items[i]
-    local y = rowY(i)
-    if y < CONTENT_TOP or y > CONTENT_BOTTOM then return end
-
-    if highlight then
-        gpu.setBackground(0x1B5E20)
-    elseif i % 2 == 0 then
-        gpu.setBackground(0x1E1E2E)
-    else
-        gpu.setBackground(0x131320)
-    end
-    gpu.fill(1, y, w, 1, " ")
-
-    -- Цветная боковая черта — заменяет старую линию-разделитель,
-    -- но не занимает отдельную строку экрана.
-    gpu.setForeground(highlight and 0x69F0AE or (i % 2 == 0 and 0x37474F or 0x263238))
-    gpu.set(1, y, "▌")
-
-    gpu.setForeground(0xFF8A80)
-    gpu.set(3, y, item.name)
-
-    gpu.setForeground(0xB0BEC5)
-    gpu.set(20, y, tostring(item.need))
+-- itemIndex — реальный индекс в items; posOnPage — 0-based позиция на странице
+local function drawCard(itemIndex, posOnPage, highlight)
+    local item = items[itemIndex]
+    local col = posOnPage % COLUMNS
+    local row = math.floor(posOnPage / COLUMNS)
+    local cx, cy = cardX(col), cardY(row)
 
     local have = getQty(item.block, item.dmg)
-    gpu.setForeground(0xEEEEEE)
-    gpu.set(28, y, tostring(have))
-
     local can = math.floor(have / item.need)
-    gpu.setForeground(can > 0 and 0x69F0AE or 0xFF5252)
-    gpu.set(38, y, "+" .. can)
-
     local sings = getQty(item.singu, item.sDmg)
-    gpu.setForeground(0xFFE082)
-    gpu.set(47, y, tostring(sings))
 
-    for b = 1, 6 do
-        gpu.setForeground(0x2A2A3C)
-        gpu.set(COUNT_POS[b] - 1, y, "│")
+    local accent, bg, borderFg
+    if highlight then
+        accent, bg, borderFg = 0x69F0AE, 0x1B5E20, 0x69F0AE
+    elseif can > 0 then
+        accent, bg, borderFg = 0x69F0AE, 0x18201C, 0x2E7D4F
+    else
+        accent, bg, borderFg = 0x546E7A, 0x181A20, 0x33404A
+    end
+
+    -- Рамка + фон
+    gpu.setBackground(bg)
+    gpu.fill(cx, cy, CARD_W, CARD_H, " ")
+
+    gpu.setForeground(borderFg)
+    gpu.set(cx, cy, "╭" .. string.rep("─", CARD_W - 2) .. "╮")
+    gpu.set(cx, cy + 1, "│")
+    gpu.set(cx + CARD_W - 1, cy + 1, "│")
+    gpu.set(cx, cy + 2, "│")
+    gpu.set(cx + CARD_W - 1, cy + 2, "│")
+    gpu.set(cx, cy + 3, "│")
+    gpu.set(cx + CARD_W - 1, cy + 3, "│")
+    gpu.set(cx, cy + 4, "╰" .. string.rep("─", CARD_W - 2) .. "╯")
+
+    -- Строка 1: акцент-метка + название + "Можно +N" справа
+    gpu.setForeground(accent)
+    gpu.set(cx + 1, cy + 1, "▎")
+    gpu.setForeground(0xF5F5F5)
+    local rightTxt = "+" .. can
+    local nameW = INNER_W - 2 - #rightTxt - 1
+    gpu.set(cx + 3, cy + 1, padRight(item.name, math.max(1, nameW)))
+    gpu.setForeground(can > 0 and 0x69F0AE or 0xFF6E6E)
+    gpu.set(cx + CARD_W - 1 - #rightTxt - 1, cy + 1, rightTxt)
+
+    -- Строка 2: Нужно / Есть / Синг / В МЭ
+    gpu.setForeground(0x90A4AE)
+    local statsLine = string.format("Нужно %s  Есть %s  Синг %d  МЭ %s",
+        shortNum(item.need), shortNum(have), sings, shortNum(have))
+    gpu.set(cx + 2, cy + 2, padRight(statsLine, INNER_W - 2))
+
+    -- Строка 3: кнопки
+    for b = 1, #COUNT_VAL do
+        local bx = cx + 1 + (b - 1) * BTN_SLOT_W
         gpu.setForeground(COUNT_COLOR[b])
-        gpu.set(COUNT_POS[b], y, " + ")
+        gpu.set(bx, cy + 3, padRight("+" .. COUNT_VAL[b], BTN_SLOT_W - 1))
     end
-
-    gpu.setForeground(0x80CBC4)
-    gpu.set(94, y, shortNum(have))
 end
 
--- Обновляет только цифры видимых строк (без полной перерисовки)
-local function updateNumbers()
-    for i = scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items) do
-        drawRow(i, i == currentCraft)
-    end
-    setStatus("Цифры обновлены", 0x80CBC4)
-end
-
--- Пилюля-индикатор прокрутки: "▲ 1-23 из 25 ▼". Рисуется всегда ярко,
--- видна независимо от фона; если всё влезает на экран — не рисуется вовсе.
-local function drawScrollIndicator()
-    local width = BTN_SCROLL_X2 - BTN_SCROLL_X1
-    if #items <= VISIBLE_ROWS then
+local function drawPageIndicator()
+    local width = BTN_PAGE_X2 - BTN_PAGE_X1
+    if TOTAL_PAGES <= 1 then
         gpu.setBackground(0x1F1F2E)
-        gpu.fill(BTN_SCROLL_X1, HEADER_Y, width, 1, " ")
+        gpu.fill(BTN_PAGE_X1, HEADER_Y, width, 1, " ")
         return
     end
-
     gpu.setBackground(0x263859)
-    gpu.fill(BTN_SCROLL_X1, HEADER_Y, width, 1, " ")
-
-    gpu.setForeground(scrollOffset > 0 and 0x64B5F6 or 0x546E7A)
-    gpu.set(BTN_SCROLL_X1 + 1, HEADER_Y, "▲")
-
+    gpu.fill(BTN_PAGE_X1, HEADER_Y, width, 1, " ")
+    gpu.setForeground(page > 0 and 0x64B5F6 or 0x546E7A)
+    gpu.set(BTN_PAGE_X1 + 1, HEADER_Y, "◀")
     gpu.setForeground(0xCFD8DC)
-    local label = string.format("%d-%d/%d",
-        scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items), #items)
-    gpu.set(BTN_SCROLL_X1 + 3, HEADER_Y, label)
-
-    gpu.setForeground(scrollOffset < maxScroll and 0x64B5F6 or 0x546E7A)
-    gpu.set(BTN_SCROLL_X2 - 1, HEADER_Y, "▼")
+    gpu.set(BTN_PAGE_X1 + 3, HEADER_Y, string.format("стр %d/%d", page + 1, TOTAL_PAGES))
+    gpu.setForeground(page < TOTAL_PAGES - 1 and 0x64B5F6 or 0x546E7A)
+    gpu.set(BTN_PAGE_X2 - 1, HEADER_Y, "▶")
 end
 
 local function draw()
-    gpu.setBackground(0x14141C)
+    gpu.setBackground(0x101014)
     gpu.fill(1, 1, w, h, " ")
 
-    -- Шапка (заголовок + все кнопки в одной строке, без лишних отступов)
+    -- Шапка
     gpu.setBackground(0x1F1F2E)
     gpu.setForeground(0xFFFFFF)
     gpu.fill(1, HEADER_Y, w, 1, " ")
-    gpu.set(2, HEADER_Y, "Singularity Creator")
+    gpu.set(2, HEADER_Y, "◆ Singularity Creator")
 
     gpu.setBackground(0x2E7D32)
     gpu.fill(BTN_REFRESH_X1, HEADER_Y, BTN_REFRESH_X2 - BTN_REFRESH_X1, 1, " ")
     gpu.setForeground(0xFFFFFF)
     gpu.set(BTN_REFRESH_X1 + 2, HEADER_Y, "ОБНОВИТЬ")
 
-    drawScrollIndicator()
+    drawPageIndicator()
 
     gpu.setBackground(0xC62828)
     gpu.fill(BTN_CANCEL_X1, HEADER_Y, BTN_CANCEL_X2 - BTN_CANCEL_X1, 1, " ")
     gpu.setForeground(0xFFFFFF)
     gpu.set(BTN_CANCEL_X1 + 3, HEADER_Y, " ОТМЕНА ")
 
-    -- Заголовки колонок — сразу под шапкой, без пустой строки между ними
-    gpu.setBackground(0x1A1A28)
-    gpu.setForeground(0x90A4AE)
-    gpu.fill(1, COLHEAD_Y, w, 1, " ")
-    gpu.set(3,  COLHEAD_Y, "Название")
-    gpu.set(20, COLHEAD_Y, "Нужно")
-    gpu.set(28, COLHEAD_Y, "Есть")
-    gpu.set(38, COLHEAD_Y, "Можно")
-    gpu.set(47, COLHEAD_Y, "Синг")
-    for b = 1, 6 do
-        gpu.set(COUNT_POS[b], COLHEAD_Y, tostring(COUNT_VAL[b]))
-    end
-    gpu.set(94, COLHEAD_Y, "В МЭ")
-
-    -- Видимые строки
-    for i = scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items) do
-        drawRow(i, i == currentCraft)
+    -- Карточки текущей страницы
+    local startIdx = page * ITEMS_PER_PAGE + 1
+    local endIdx = math.min(startIdx + ITEMS_PER_PAGE - 1, #items)
+    for i = startIdx, endIdx do
+        drawCard(i, i - startIdx, i == currentCraft)
     end
 
     setStatus("Готов к работе", 0x78909C)
 end
 
-local function scroll(delta)
-    if #items <= VISIBLE_ROWS then return end
-    scrollOffset = scrollOffset + delta
-    clampScroll()
+local function changePage(delta)
+    if TOTAL_PAGES <= 1 then return end
+    page = page + delta
+    clampPage()
     draw()
+end
+
+-- Обновляет только цифры карточек текущей страницы
+local function updateNumbers()
+    local startIdx = page * ITEMS_PER_PAGE + 1
+    local endIdx = math.min(startIdx + ITEMS_PER_PAGE - 1, #items)
+    for i = startIdx, endIdx do
+        drawCard(i, i - startIdx, i == currentCraft)
+    end
+    setStatus("Цифры обновлены", 0x80CBC4)
+end
+
+-- Определяет индекс предмета по клику (x, y), либо nil.
+-- Возвращает также номер нажатой кнопки количества (1..6), либо nil.
+local function hitTest(x, y)
+    if y < CONTENT_TOP or y > CONTENT_BOTTOM then return nil end
+
+    local localY = y - CONTENT_TOP
+    local rowStep = CARD_H + GAP_Y
+    local row = math.floor(localY / rowStep)
+    local rowOffset = localY - row * rowStep
+    if rowOffset >= CARD_H then return nil end   -- клик в межрядном зазоре
+
+    local localX = x - MARGIN - 1
+    if localX < 0 then return nil end
+    local colStep = CARD_W + GAP_X
+    local col = math.floor(localX / colStep)
+    local colOffset = localX - col * colStep
+    if col < 0 or col >= COLUMNS or colOffset >= CARD_W then return nil end
+
+    local posOnPage = row * COLUMNS + col
+    local itemIndex = page * ITEMS_PER_PAGE + posOnPage + 1
+    if itemIndex < 1 or itemIndex > #items then return nil end
+    if posOnPage >= ITEMS_PER_PAGE then return nil end
+
+    local btn = nil
+    if rowOffset == 3 then   -- строка кнопок внутри карточки
+        local bx = colOffset - 1
+        if bx >= 0 then
+            local b = math.floor(bx / BTN_SLOT_W) + 1
+            local within = bx - (b - 1) * BTN_SLOT_W
+            if b >= 1 and b <= #COUNT_VAL and within < BTN_SLOT_W - 1 then
+                btn = b
+            end
+        end
+    end
+
+    return itemIndex, btn
 end
 
 -- ============================================================
@@ -305,7 +336,8 @@ local function doCraft(index, count)
     crafting = true
     cancel = false
     currentCraft = index
-    drawRow(index, true)
+    local startIdx = page * ITEMS_PER_PAGE + 1
+    drawCard(index, index - startIdx, true)
 
     local needed = item.need * count
     local have = getQty(item.block, item.dmg)
@@ -345,7 +377,7 @@ local function doCraft(index, count)
     end
 
     currentCraft = 0
-    drawRow(index, false)
+    drawCard(index, index - startIdx, false)
 
     if cancel then
         setStatus("✖ ОТМЕНЕНО  |  " .. dropped .. " / " .. needed, 0xFF5252)
@@ -368,8 +400,6 @@ term.clear()
 draw()
 
 while true do
-    -- Слушаем ЛЮБОЕ событие (без фильтра по имени), чтобы не терять
-    -- параметры "scroll" — раньше направление колеса терялось.
     local e, _, x, y, p5 = event.pull(0.2)
 
     if e == "touch" then
@@ -382,30 +412,19 @@ while true do
             if x >= BTN_REFRESH_X1 and x <= BTN_REFRESH_X2 and y == HEADER_Y then
                 computer.beep(800, 0.02)
                 updateNumbers()
-            elseif x >= BTN_SCROLL_X1 and x <= BTN_SCROLL_X2 and y == HEADER_Y then
+            elseif x >= BTN_PAGE_X1 and x <= BTN_PAGE_X2 and y == HEADER_Y then
                 computer.beep(600, 0.02)
-                -- левая половина пилюли — вверх, правая — вниз
-                local mid = (BTN_SCROLL_X1 + BTN_SCROLL_X2) / 2
-                scroll(x < mid and -1 or 1)
+                local mid = (BTN_PAGE_X1 + BTN_PAGE_X2) / 2
+                changePage(x < mid and -1 or 1)
             else
-                local idx = indexAtY(y)
-                if idx then
-                    -- Кнопка " + " занимает 3 символа: pos, pos+1, pos+2
-                    for b = 1, 6 do
-                        local px = COUNT_POS[b]
-                        if x >= px and x <= px + 2 then
-                            computer.beep(1000, 0.03)
-                            setStatus(string.format("▶ Клик распознан как: %s (стр. y=%d, idx=%d)", items[idx].name, y, idx), 0xFFE082)
-                            os.sleep(0.3)
-                            doCraft(idx, COUNT_VAL[b])
-                            break
-                        end
-                    end
+                local idx, btn = hitTest(x, y)
+                if idx and btn then
+                    computer.beep(1000, 0.03)
+                    doCraft(idx, COUNT_VAL[btn])
                 end
             end
         end
     elseif e == "scroll" and not crafting then
-        -- direction обычно 1 (от себя/вверх) или -1 (к себе/вниз)
-        scroll(p5 and -p5 or 0)
+        changePage(p5 and -p5 or 0)
     end
 end
