@@ -2,8 +2,11 @@ local component = require("component")
 local event = require("event")
 local computer = require("computer")
 local term = require("term")
+local unicode = require("unicode")
 local gpu = component.gpu
 local ae = component.me_interface
+
+local uLen, uSub = unicode.len, unicode.sub
 
 -- ============================================================
 --  Адаптивное разрешение — берём РЕАЛЬНОЕ после установки
@@ -43,20 +46,21 @@ local items = {
 }
 
 -- ============================================================
---  Раскладка: карточная сетка (3 колонки)
+--  Раскладка: карточная сетка (4 колонки — влезают все 25 сразу)
 -- ============================================================
 local HEADER_Y       = 1
 local CONTENT_TOP    = 2
 local STATUS_Y       = h
 local CONTENT_BOTTOM = h - 1
 
-local COLUMNS  = 3
+local COLUMNS  = 4
 local MARGIN   = 1
 local GAP_X    = 2
 local GAP_Y    = 1
-local CARD_H   = 5   -- ╭border, name, stats, buttons, ╰border
+local CARD_H   = 5      -- ╭border, имя, статы, кнопки, ╰border
 local CARD_W   = math.floor((w - 2 * MARGIN - (COLUMNS - 1) * GAP_X) / COLUMNS)
-local INNER_W  = CARD_W - 2   -- ширина текста внутри рамки │...│
+local INNER_W  = CARD_W - 2
+local RIGHT_ZONE = 12    -- фикс. зона под "Можно +N" — исключает "хвосты" при смене длины числа
 
 local ROWS_AVAILABLE = math.max(1, math.floor((CONTENT_BOTTOM - CONTENT_TOP + 1) / (CARD_H + GAP_Y)))
 local ITEMS_PER_PAGE = ROWS_AVAILABLE * COLUMNS
@@ -73,14 +77,20 @@ local BTN_SLOT_W  = math.max(4, math.floor(INNER_W / #COUNT_VAL))
 local crafting = false
 local cancel = false
 local currentCraft = 0
-local page = 0   -- текущая страница, 0-индекс
+local page = 0
+
+-- Фоновое обновление цифр — троттлинг, чтобы не грузить интерфейс
+local REFRESH_INTERVAL = 15     -- сек, автообновление всего списка
+local ITEMS_PER_TICK   = 3      -- сколько карточек опрашивать за один такт цикла
+local refreshQueue = {}
+local refreshing = false
+local lastAutoRefresh = 0
 
 local function clampPage()
     if page < 0 then page = 0 end
     if page > TOTAL_PAGES - 1 then page = TOTAL_PAGES - 1 end
 end
 
--- Позиция карточки на экране по (col, row) — 0-индексы в пределах страницы
 local function cardX(col) return MARGIN + col * (CARD_W + GAP_X) + 1 end
 local function cardY(row) return CONTENT_TOP + row * (CARD_H + GAP_Y) end
 
@@ -92,9 +102,18 @@ local function getQty(id, dmg)
         return ae.getItemDetail({id = id, dmg = dmg})
     end)
     if ok and data then
-        return data.all().qty or 0
+        local st = data.all()
+        return st and st.qty or 0
     end
     return 0
+end
+
+-- Пытается запустить автокрафт. true = job стартовал, false = нет шаблона/не удалось.
+local function tryRequestCrafting(item, missing)
+    local ok, result = pcall(function()
+        return ae.requestCrafting({id = item.block, dmg = item.dmg}, missing)
+    end)
+    return ok and result and true or false
 end
 
 local function shortNum(n)
@@ -109,8 +128,9 @@ end
 
 local function padRight(s, len)
     s = tostring(s)
-    if #s >= len then return s:sub(1, len) end
-    return s .. string.rep(" ", len - #s)
+    local l = uLen(s)
+    if l >= len then return uSub(s, 1, len) end
+    return s .. string.rep(" ", len - l)
 end
 
 local function exportItems(id, dmg, amount)
@@ -162,11 +182,82 @@ local function setStatus(text, color)
 end
 
 -- ============================================================
---  Отрисовка карточки
+--  Цвета карточки по статусу
 -- ============================================================
--- itemIndex — реальный индекс в items; posOnPage — 0-based позиция на странице
-local function drawCard(itemIndex, posOnPage, highlight)
+local function cardColors(can, highlight)
+    if highlight then
+        return 0x69F0AE, 0x1B5E20, 0x69F0AE          -- accent, bg, borderFg
+    elseif can > 0 then
+        return 0x69F0AE, 0x18201C, 0x2E7D4F
+    else
+        return 0x546E7A, 0x181A20, 0x33404A
+    end
+end
+
+local function posOnPageOf(itemIndex)
+    return itemIndex - 1 - page * ITEMS_PER_PAGE
+end
+
+-- ============================================================
+--  ЦИФРЫ (лёгкая перерисовка — только динамические поля)
+-- ============================================================
+local function drawCardNumbers(itemIndex, preHave, preCan, preSings)
     local item = items[itemIndex]
+    local posOnPage = posOnPageOf(itemIndex)
+    if posOnPage < 0 or posOnPage >= ITEMS_PER_PAGE then return end
+
+    local col = posOnPage % COLUMNS
+    local row = math.floor(posOnPage / COLUMNS)
+    local cx, cy = cardX(col), cardY(row)
+
+    local have  = preHave  or getQty(item.block, item.dmg)
+    local can   = preCan   or math.floor(have / item.need)
+    local sings = preSings or getQty(item.singu, item.sDmg)
+
+    local highlight = (itemIndex == currentCraft)
+    local accent, bg = cardColors(can, highlight)
+    gpu.setBackground(bg)
+
+    -- живой индикатор (не трогает саму рамку)
+    gpu.setForeground(accent)
+    gpu.set(cx + 1, cy + 1, "▎")
+
+    -- "Можно +N" — фиксированная зона справа, всегда полностью перезаписывается
+    local zoneStart = cx + CARD_W - 1 - RIGHT_ZONE
+    gpu.set(zoneStart, cy + 1, string.rep(" ", RIGHT_ZONE))
+    local labelPart = "Можно "
+    local valuePart = "+" .. can
+    local totalLen = uLen(labelPart) + uLen(valuePart)
+    gpu.setForeground(0x90A4AE)
+    gpu.set(zoneStart + (RIGHT_ZONE - totalLen), cy + 1, labelPart)
+    gpu.setForeground(can > 0 and 0x69F0AE or 0xFF6E6E)
+    gpu.set(zoneStart + (RIGHT_ZONE - uLen(valuePart)), cy + 1, valuePart)
+
+    -- Нужно │ Есть │ Синг — с разделителями
+    gpu.fill(cx + 2, cy + 2, INNER_W - 2, 1, " ")
+    local px = cx + 2
+    gpu.setForeground(0x90A4AE); gpu.set(px, cy + 2, "Нужно "); px = px + 6
+    local s1 = shortNum(item.need)
+    gpu.setForeground(0xE0E0E0); gpu.set(px, cy + 2, s1); px = px + uLen(s1) + 1
+    gpu.setForeground(0x37474F); gpu.set(px, cy + 2, "│"); px = px + 2
+    gpu.setForeground(0x90A4AE); gpu.set(px, cy + 2, "Есть "); px = px + 5
+    local s2 = shortNum(have)
+    gpu.setForeground(0xE0E0E0); gpu.set(px, cy + 2, s2); px = px + uLen(s2) + 1
+    gpu.setForeground(0x37474F); gpu.set(px, cy + 2, "│"); px = px + 2
+    gpu.setForeground(0xFFD54F); gpu.set(px, cy + 2, "Синг "); px = px + 5
+    gpu.setForeground(0xFFD54F); gpu.set(px, cy + 2, tostring(sings))
+
+    return have, can, sings
+end
+
+-- ============================================================
+--  КАРКАС (полная перерисовка — рамка/имя/кнопки; редкие события)
+-- ============================================================
+local function drawCardFull(itemIndex, highlight)
+    local item = items[itemIndex]
+    local posOnPage = posOnPageOf(itemIndex)
+    if posOnPage < 0 or posOnPage >= ITEMS_PER_PAGE then return end
+
     local col = posOnPage % COLUMNS
     local row = math.floor(posOnPage / COLUMNS)
     local cx, cy = cardX(col), cardY(row)
@@ -174,52 +265,35 @@ local function drawCard(itemIndex, posOnPage, highlight)
     local have = getQty(item.block, item.dmg)
     local can = math.floor(have / item.need)
     local sings = getQty(item.singu, item.sDmg)
+    local _, bg, borderFg = cardColors(can, highlight)
 
-    local accent, bg, borderFg
-    if highlight then
-        accent, bg, borderFg = 0x69F0AE, 0x1B5E20, 0x69F0AE
-    elseif can > 0 then
-        accent, bg, borderFg = 0x69F0AE, 0x18201C, 0x2E7D4F
-    else
-        accent, bg, borderFg = 0x546E7A, 0x181A20, 0x33404A
-    end
-
-    -- Рамка + фон
     gpu.setBackground(bg)
     gpu.fill(cx, cy, CARD_W, CARD_H, " ")
 
     gpu.setForeground(borderFg)
     gpu.set(cx, cy, "╭" .. string.rep("─", CARD_W - 2) .. "╮")
-    gpu.set(cx, cy + 1, "│")
-    gpu.set(cx + CARD_W - 1, cy + 1, "│")
-    gpu.set(cx, cy + 2, "│")
-    gpu.set(cx + CARD_W - 1, cy + 2, "│")
-    gpu.set(cx, cy + 3, "│")
-    gpu.set(cx + CARD_W - 1, cy + 3, "│")
+    gpu.set(cx, cy + 1, "│"); gpu.set(cx + CARD_W - 1, cy + 1, "│")
+    gpu.set(cx, cy + 2, "│"); gpu.set(cx + CARD_W - 1, cy + 2, "│")
+    gpu.set(cx, cy + 3, "│"); gpu.set(cx + CARD_W - 1, cy + 3, "│")
     gpu.set(cx, cy + 4, "╰" .. string.rep("─", CARD_W - 2) .. "╯")
 
-    -- Строка 1: акцент-метка + название + "Можно +N" справа
-    gpu.setForeground(accent)
-    gpu.set(cx + 1, cy + 1, "▎")
+    -- имя (статично для предмета)
+    local nameMax = INNER_W - 3 - RIGHT_ZONE - 1
     gpu.setForeground(0xF5F5F5)
-    local rightTxt = "+" .. can
-    local nameW = INNER_W - 2 - #rightTxt - 1
-    gpu.set(cx + 3, cy + 1, padRight(item.name, math.max(1, nameW)))
-    gpu.setForeground(can > 0 and 0x69F0AE or 0xFF6E6E)
-    gpu.set(cx + CARD_W - 1 - #rightTxt - 1, cy + 1, rightTxt)
+    gpu.set(cx + 3, cy + 1, padRight(item.name, math.max(4, nameMax)))
 
-    -- Строка 2: Нужно / Есть / Синг / В МЭ
-    gpu.setForeground(0x90A4AE)
-    local statsLine = string.format("Нужно %s  Есть %s  Синг %d  МЭ %s",
-        shortNum(item.need), shortNum(have), sings, shortNum(have))
-    gpu.set(cx + 2, cy + 2, padRight(statsLine, INNER_W - 2))
-
-    -- Строка 3: кнопки
+    -- кнопки количества, с тонкими разделителями между ними
     for b = 1, #COUNT_VAL do
         local bx = cx + 1 + (b - 1) * BTN_SLOT_W
         gpu.setForeground(COUNT_COLOR[b])
         gpu.set(bx, cy + 3, padRight("+" .. COUNT_VAL[b], BTN_SLOT_W - 1))
+        if b < #COUNT_VAL then
+            gpu.setForeground(0x37474F)
+            gpu.set(bx + BTN_SLOT_W - 1, cy + 3, "│")
+        end
     end
+
+    drawCardNumbers(itemIndex, have, can, sings)
 end
 
 local function drawPageIndicator()
@@ -239,11 +313,7 @@ local function drawPageIndicator()
     gpu.set(BTN_PAGE_X2 - 1, HEADER_Y, "▶")
 end
 
-local function draw()
-    gpu.setBackground(0x101014)
-    gpu.fill(1, 1, w, h, " ")
-
-    -- Шапка
+local function drawHeader()
     gpu.setBackground(0x1F1F2E)
     gpu.setForeground(0xFFFFFF)
     gpu.fill(1, HEADER_Y, w, 1, " ")
@@ -260,12 +330,17 @@ local function draw()
     gpu.fill(BTN_CANCEL_X1, HEADER_Y, BTN_CANCEL_X2 - BTN_CANCEL_X1, 1, " ")
     gpu.setForeground(0xFFFFFF)
     gpu.set(BTN_CANCEL_X1 + 3, HEADER_Y, " ОТМЕНА ")
+end
 
-    -- Карточки текущей страницы
+local function draw()
+    gpu.setBackground(0x101014)
+    gpu.fill(1, 1, w, h, " ")
+    drawHeader()
+
     local startIdx = page * ITEMS_PER_PAGE + 1
     local endIdx = math.min(startIdx + ITEMS_PER_PAGE - 1, #items)
     for i = startIdx, endIdx do
-        drawCard(i, i - startIdx, i == currentCraft)
+        drawCardFull(i, i == currentCraft)
     end
 
     setStatus("Готов к работе", 0x78909C)
@@ -275,21 +350,22 @@ local function changePage(delta)
     if TOTAL_PAGES <= 1 then return end
     page = page + delta
     clampPage()
+    refreshQueue = {}          -- бросаем недообработанную очередь старой страницы
     draw()
 end
 
--- Обновляет только цифры карточек текущей страницы
-local function updateNumbers()
-    local startIdx = page * ITEMS_PER_PAGE + 1
-    local endIdx = math.min(startIdx + ITEMS_PER_PAGE - 1, #items)
-    for i = startIdx, endIdx do
-        drawCard(i, i - startIdx, i == currentCraft)
+-- Ставит все предметы в очередь на лёгкое (не блокирующее) обновление цифр
+local function enqueueAll()
+    refreshQueue = {}
+    for i = 1, #items do
+        refreshQueue[#refreshQueue + 1] = i
     end
-    setStatus("Цифры обновлены", 0x80CBC4)
+    refreshing = true
 end
 
--- Определяет индекс предмета по клику (x, y), либо nil.
--- Возвращает также номер нажатой кнопки количества (1..6), либо nil.
+-- ============================================================
+--  Определение клика: индекс предмета + номер кнопки (1..6)
+-- ============================================================
 local function hitTest(x, y)
     if y < CONTENT_TOP or y > CONTENT_BOTTOM then return nil end
 
@@ -297,7 +373,7 @@ local function hitTest(x, y)
     local rowStep = CARD_H + GAP_Y
     local row = math.floor(localY / rowStep)
     local rowOffset = localY - row * rowStep
-    if rowOffset >= CARD_H then return nil end   -- клик в межрядном зазоре
+    if rowOffset >= CARD_H then return nil end
 
     local localX = x - MARGIN - 1
     if localX < 0 then return nil end
@@ -307,12 +383,12 @@ local function hitTest(x, y)
     if col < 0 or col >= COLUMNS or colOffset >= CARD_W then return nil end
 
     local posOnPage = row * COLUMNS + col
+    if posOnPage >= ITEMS_PER_PAGE then return nil end
     local itemIndex = page * ITEMS_PER_PAGE + posOnPage + 1
     if itemIndex < 1 or itemIndex > #items then return nil end
-    if posOnPage >= ITEMS_PER_PAGE then return nil end
 
     local btn = nil
-    if rowOffset == 3 then   -- строка кнопок внутри карточки
+    if rowOffset == 3 then
         local bx = colOffset - 1
         if bx >= 0 then
             local b = math.floor(bx / BTN_SLOT_W) + 1
@@ -336,19 +412,36 @@ local function doCraft(index, count)
     crafting = true
     cancel = false
     currentCraft = index
-    local startIdx = page * ITEMS_PER_PAGE + 1
-    drawCard(index, index - startIdx, true)
+    drawCardFull(index, true)
 
     local needed = item.need * count
     local have = getQty(item.block, item.dmg)
 
     if have < needed and item.ruda == 0 then
         local missing = needed - have
-        setStatus("Заказываю в МЭ: " .. missing .. " × " .. item.name, 0xFFE082)
-        pcall(function()
-            ae.requestCrafting({id = item.block, dmg = item.dmg}, missing)
-        end)
-        os.sleep(0.1)
+        local started = false
+
+        while not started and not cancel do
+            setStatus(string.format("⏳ Запрашиваю крафт: %s (не хватает %d)...", item.name, missing), 0xFFE082)
+            started = tryRequestCrafting(item, missing)
+
+            if started then
+                setStatus("▶ Крафт запущен: " .. item.name .. " — жду блоки...", 0x69F0AE)
+                computer.beep(700, 0.03)
+            else
+                setStatus(string.format("⚠ Нет шаблона: «%s»! Повтор через 5с...", item.name), 0xFF8A65)
+                local waited = 0
+                while waited < 5 and not cancel do
+                    local e, _, x, y = event.pull(0.2, "touch")
+                    if e == "touch" and x >= BTN_CANCEL_X1 and x <= BTN_CANCEL_X2 and y == HEADER_Y then
+                        cancel = true
+                        computer.beep(200, 0.05)
+                        break
+                    end
+                    waited = waited + 0.2
+                end
+            end
+        end
     end
 
     local dropped = 0
@@ -364,7 +457,7 @@ local function doCraft(index, count)
         local got = exportItems(item.block, item.dmg, toTake)
         dropped = dropped + got
 
-        local percent = math.floor(dropped / needed * 100)
+        local percent = needed > 0 and math.floor(dropped / needed * 100) or 100
         local barLen = 28
         local filled = math.floor(barLen * percent / 100)
         local bar = string.rep("█", filled) .. string.rep("░", barLen - filled)
@@ -377,7 +470,7 @@ local function doCraft(index, count)
     end
 
     currentCraft = 0
-    drawCard(index, index - startIdx, false)
+    drawCardFull(index, false)   -- также обновляет числа именно этой карточки
 
     if cancel then
         setStatus("✖ ОТМЕНЕНО  |  " .. dropped .. " / " .. needed, 0xFF5252)
@@ -390,7 +483,7 @@ local function doCraft(index, count)
 
     crafting = false
     cancel = false
-    os.sleep(0.7)
+    os.sleep(0.6)
 end
 
 -- ============================================================
@@ -398,9 +491,10 @@ end
 -- ============================================================
 term.clear()
 draw()
+lastAutoRefresh = computer.uptime()
 
 while true do
-    local e, _, x, y, p5 = event.pull(0.2)
+    local e, _, x, y, p5 = event.pull(0.15)
 
     if e == "touch" then
         if crafting then
@@ -411,7 +505,8 @@ while true do
         else
             if x >= BTN_REFRESH_X1 and x <= BTN_REFRESH_X2 and y == HEADER_Y then
                 computer.beep(800, 0.02)
-                updateNumbers()
+                enqueueAll()
+                lastAutoRefresh = computer.uptime()
             elseif x >= BTN_PAGE_X1 and x <= BTN_PAGE_X2 and y == HEADER_Y then
                 computer.beep(600, 0.02)
                 local mid = (BTN_PAGE_X1 + BTN_PAGE_X2) / 2
@@ -425,6 +520,29 @@ while true do
             end
         end
     elseif e == "scroll" and not crafting then
+        local mid = (BTN_PAGE_X1 + BTN_PAGE_X2) / 2
         changePage(p5 and -p5 or 0)
+    end
+
+    -- Фоновое обслуживание цифр — только когда ничего не крафтится,
+    -- маленькими порциями, чтобы клики никогда не залипали.
+    if not crafting then
+        if #refreshQueue == 0 and (computer.uptime() - lastAutoRefresh) >= REFRESH_INTERVAL then
+            enqueueAll()
+            lastAutoRefresh = computer.uptime()
+        end
+
+        for _ = 1, ITEMS_PER_TICK do
+            if #refreshQueue == 0 then break end
+            local idx = table.remove(refreshQueue, 1)
+            local pos = posOnPageOf(idx)
+            if pos >= 0 and pos < ITEMS_PER_PAGE then
+                drawCardNumbers(idx)
+            end
+        end
+
+        if refreshing and #refreshQueue == 0 then
+            refreshing = false
+        end
     end
 end
