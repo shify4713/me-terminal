@@ -7,10 +7,12 @@ local ae = component.me_interface
 
 -- ============================================================
 --  Адаптивное разрешение (не падает на GPU/экранах ниже 3 тира)
+--  Берём РЕАЛЬНОЕ разрешение после установки — оно может
+--  отличаться от запрошенного (клампится драйвером/экраном).
 -- ============================================================
 local maxW, maxH = gpu.maxResolution()
-local w, h = math.min(160, maxW), math.min(50, maxH)
-gpu.setResolution(w, h)
+gpu.setResolution(math.min(160, maxW), math.min(50, maxH))
+local w, h = gpu.getResolution()
 
 local EXPORT_SIDE = "DOWN"
 
@@ -45,15 +47,15 @@ local items = {
 -- ============================================================
 --  Раскладка экрана
 -- ============================================================
-local HEADER_Y      = 1
-local SEP_Y         = 2
-local COLHEAD_Y      = 3
-local CONTENT_TOP    = 4
-local CONTENT_BOTTOM = h - 2          -- последние 2 строки — под статус-бар
+local HEADER_Y       = 1              -- заголовок + кнопки
+local COLHEAD_Y      = 2              -- заголовки колонок (сразу под шапкой)
+local CONTENT_TOP    = 3
+local STATUS_Y       = h              -- статус — ОДНА строка внизу
+local CONTENT_BOTTOM = h - 1
 local VISIBLE_ROWS   = CONTENT_BOTTOM - CONTENT_TOP + 1
 
-local BTN_REFRESH_X1, BTN_REFRESH_X2 = 108, 123
-local BTN_UP_X, BTN_DOWN_X           = 125, 128
+local BTN_REFRESH_X1, BTN_REFRESH_X2 = 100, 115
+local BTN_SCROLL_X1, BTN_SCROLL_X2   = 117, 136   -- пилюля "▲ 1-23 из 25 ▼"
 local BTN_CANCEL_X1, BTN_CANCEL_X2   = 138, 157
 
 local COUNT_POS = {56, 62, 68, 74, 80, 86}
@@ -152,8 +154,8 @@ end
 local function setStatus(text, color)
     gpu.setBackground(0x1C1C28)
     gpu.setForeground(color or 0xDDDDDD)
-    gpu.fill(1, h - 1, w, 2, " ")
-    gpu.set(2, h - 1, text)
+    gpu.fill(1, STATUS_Y, w, 1, " ")
+    gpu.set(2, STATUS_Y, text)
 end
 
 -- ============================================================
@@ -169,13 +171,15 @@ local function drawRow(i, highlight)
     if highlight then
         gpu.setBackground(0x1B5E20)
     elseif i % 2 == 0 then
-        gpu.setBackground(0x1C1C2A)
+        gpu.setBackground(0x1E1E2E)
     else
-        gpu.setBackground(0x161622)
+        gpu.setBackground(0x131320)
     end
     gpu.fill(1, y, w, 1, " ")
 
-    gpu.setForeground(0x4A4A60)
+    -- Цветная боковая черта — заменяет старую линию-разделитель,
+    -- но не занимает отдельную строку экрана.
+    gpu.setForeground(highlight and 0x69F0AE or (i % 2 == 0 and 0x37474F or 0x263238))
     gpu.set(1, y, "▌")
 
     gpu.setForeground(0xFF8A80)
@@ -215,20 +219,36 @@ local function updateNumbers()
     setStatus("Цифры обновлены", 0x80CBC4)
 end
 
+-- Пилюля-индикатор прокрутки: "▲ 1-23 из 25 ▼". Рисуется всегда ярко,
+-- видна независимо от фона; если всё влезает на экран — не рисуется вовсе.
 local function drawScrollIndicator()
-    gpu.setBackground(0x1F1F2E)
-    gpu.fill(BTN_UP_X - 1, HEADER_Y, 5, 1, " ")
-    gpu.setForeground(scrollOffset > 0 and 0x64B5F6 or 0x3A3A4A)
-    gpu.set(BTN_UP_X, HEADER_Y, "▲")
-    gpu.setForeground(scrollOffset < maxScroll and 0x64B5F6 or 0x3A3A4A)
-    gpu.set(BTN_DOWN_X, HEADER_Y, "▼")
+    local width = BTN_SCROLL_X2 - BTN_SCROLL_X1
+    if #items <= VISIBLE_ROWS then
+        gpu.setBackground(0x1F1F2E)
+        gpu.fill(BTN_SCROLL_X1, HEADER_Y, width, 1, " ")
+        return
+    end
+
+    gpu.setBackground(0x263859)
+    gpu.fill(BTN_SCROLL_X1, HEADER_Y, width, 1, " ")
+
+    gpu.setForeground(scrollOffset > 0 and 0x64B5F6 or 0x546E7A)
+    gpu.set(BTN_SCROLL_X1 + 1, HEADER_Y, "▲")
+
+    gpu.setForeground(0xCFD8DC)
+    local label = string.format("%d-%d/%d",
+        scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items), #items)
+    gpu.set(BTN_SCROLL_X1 + 3, HEADER_Y, label)
+
+    gpu.setForeground(scrollOffset < maxScroll and 0x64B5F6 or 0x546E7A)
+    gpu.set(BTN_SCROLL_X2 - 1, HEADER_Y, "▼")
 end
 
 local function draw()
     gpu.setBackground(0x14141C)
     gpu.fill(1, 1, w, h, " ")
 
-    -- Шапка
+    -- Шапка (заголовок + все кнопки в одной строке, без лишних отступов)
     gpu.setBackground(0x1F1F2E)
     gpu.setForeground(0xFFFFFF)
     gpu.fill(1, HEADER_Y, w, 1, " ")
@@ -246,10 +266,7 @@ local function draw()
     gpu.setForeground(0xFFFFFF)
     gpu.set(BTN_CANCEL_X1 + 3, HEADER_Y, " ОТМЕНА ")
 
-    gpu.setBackground(0x2A2A3C)
-    gpu.fill(1, SEP_Y, w, 1, " ")
-
-    -- Заголовки колонок
+    -- Заголовки колонок — сразу под шапкой, без пустой строки между ними
     gpu.setBackground(0x1A1A28)
     gpu.setForeground(0x90A4AE)
     gpu.fill(1, COLHEAD_Y, w, 1, " ")
@@ -268,12 +285,7 @@ local function draw()
         drawRow(i, i == currentCraft)
     end
 
-    if #items > VISIBLE_ROWS then
-        setStatus(string.format("Готов к работе  |  показано %d-%d из %d",
-            scrollOffset + 1, math.min(scrollOffset + VISIBLE_ROWS, #items), #items), 0x78909C)
-    else
-        setStatus("Готов к работе", 0x78909C)
-    end
+    setStatus("Готов к работе", 0x78909C)
 end
 
 local function scroll(delta)
@@ -356,10 +368,9 @@ term.clear()
 draw()
 
 while true do
-    local e, _, x, y, direction = event.pull(0.2, "touch")
-    if not e then
-        e = select(1, event.pull(0, "scroll"))
-    end
+    -- Слушаем ЛЮБОЕ событие (без фильтра по имени), чтобы не терять
+    -- параметры "scroll" — раньше направление колеса терялось.
+    local e, _, x, y, p5 = event.pull(0.2)
 
     if e == "touch" then
         if crafting then
@@ -371,12 +382,11 @@ while true do
             if x >= BTN_REFRESH_X1 and x <= BTN_REFRESH_X2 and y == HEADER_Y then
                 computer.beep(800, 0.02)
                 updateNumbers()
-            elseif x == BTN_UP_X and y == HEADER_Y then
+            elseif x >= BTN_SCROLL_X1 and x <= BTN_SCROLL_X2 and y == HEADER_Y then
                 computer.beep(600, 0.02)
-                scroll(-1)
-            elseif x == BTN_DOWN_X and y == HEADER_Y then
-                computer.beep(600, 0.02)
-                scroll(1)
+                -- левая половина пилюли — вверх, правая — вниз
+                local mid = (BTN_SCROLL_X1 + BTN_SCROLL_X2) / 2
+                scroll(x < mid and -1 or 1)
             else
                 local idx = indexAtY(y)
                 if idx then
@@ -385,6 +395,8 @@ while true do
                         local px = COUNT_POS[b]
                         if x >= px and x <= px + 2 then
                             computer.beep(1000, 0.03)
+                            setStatus(string.format("▶ Клик распознан как: %s (стр. y=%d, idx=%d)", items[idx].name, y, idx), 0xFFE082)
+                            os.sleep(0.3)
                             doCraft(idx, COUNT_VAL[b])
                             break
                         end
@@ -393,6 +405,7 @@ while true do
             end
         end
     elseif e == "scroll" and not crafting then
-        scroll(direction and -direction or 0)
+        -- direction обычно 1 (от себя/вверх) или -1 (к себе/вниз)
+        scroll(p5 and -p5 or 0)
     end
 end
